@@ -1725,3 +1725,7 @@ textarea.input {
 .approval-actions {
   flex-wrap: wrap;
 }
+.model-control-vram {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}

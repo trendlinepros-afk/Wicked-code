@@ -129,6 +129,8 @@ export interface GpuStats {
   usedMB: number
   ollamaVramMB: number
   systemRamMB: number
+  /** Models Ollama currently has in memory. */
+  models?: { name: string; vramMB: number; totalMB: number }[]
 }
 
 export interface PullProgress {

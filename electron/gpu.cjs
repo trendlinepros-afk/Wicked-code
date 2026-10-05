@@ -87,7 +87,9 @@ async function getGpuStats(getLoaded) {
 
   const totalMB = gpus.reduce((a, g) => a + g.totalMB, 0)
   const usedMB = gpus.reduce((a, g) => a + g.usedMB, 0)
-  return { source, gpus, totalMB, usedMB, ollamaVramMB, systemRamMB }
+  // Per-model memory of what Ollama currently has loaded (VRAM part and total incl. any CPU offload).
+  const models = loaded.map((m) => ({ name: m.name, vramMB: Math.round((m.sizeVram || 0) / 1048576), totalMB: Math.round((m.size || 0) / 1048576) }))
+  return { source, gpus, totalMB, usedMB, ollamaVramMB, systemRamMB, models }
 }
 
 module.exports = { getGpuStats, parseNvidia, parseRocm }

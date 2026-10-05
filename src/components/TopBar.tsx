@@ -1,5 +1,6 @@
 import { api, parseModelId, PROVIDER_LABELS, type Mode } from '../lib/api'
 import { useApp } from '../lib/store'
+import { catalogInfo, estimateVramGB } from '../lib/catalog'
 import { Icon, Spinner } from './ui'
 
 export function TopBar({
@@ -38,7 +39,7 @@ export function TopBar({
 }
 
 function ModelControl() {
-  const { modelState, ollamaRunning } = useApp()
+  const { modelState, ollamaRunning, gpu, localModels } = useApp()
   if (!modelState) return null
   const { provider, model } = parseModelId(modelState.model)
   const status = modelState.status
@@ -55,21 +56,42 @@ function ModelControl() {
       : status === 'loaded'
         ? modelState.busy
           ? 'In use'
-          : modelState.idleRemaining != null
-            ? `Loaded · auto-unload in ${modelState.idleRemaining}s`
-            : 'Loaded'
+          : 'Loaded'
         : status === 'error'
           ? 'Error'
           : status === 'unloaded'
             ? 'Not loaded'
             : label
 
+  // VRAM this model uses: measured from Ollama while loaded, otherwise the estimate for loading it.
+  let vramText: string | null = null
+  if (modelState.local && model) {
+    const live = gpu?.models?.find((m) => m.name === model || m.name === `${model}:latest`)
+    if (live && live.vramMB > 0) {
+      vramText = `${(live.vramMB / 1024).toFixed(1)} GB VRAM`
+      if (live.totalMB - live.vramMB > 512) vramText += ` + ${((live.totalMB - live.vramMB) / 1024).toFixed(1)} GB RAM`
+    } else {
+      const installed = localModels.find((m) => m.name === model || m.name === `${model}:latest`)
+      const need = catalogInfo(model)?.vramGB ?? (installed ? estimateVramGB(installed.size) : null)
+      if (need) vramText = `~${need} GB VRAM`
+    }
+  }
+
   return (
     <div className={`model-control status-${status}`} title={modelState.error || ''}>
       <span className="status-dot" />
       <div className="model-control-text">
         <span className="model-control-name">{model || 'No model selected'}</span>
-        <span className="model-control-status">{!modelState.local || ollamaRunning ? statusText : 'Ollama not running'}</span>
+        <span className="model-control-status">
+          {!modelState.local || ollamaRunning ? statusText : 'Ollama not running'}
+          {vramText && (
+            <span className="model-control-vram" title={status === 'loaded' ? 'Memory this model is using right now' : 'Estimated memory needed to load this model'}>
+              {' · '}
+              {vramText}
+            </span>
+          )}
+          {status === 'loaded' && !modelState.busy && modelState.idleRemaining != null && ` · unloads in ${modelState.idleRemaining}s`}
+        </span>
       </div>
       {modelState.local ? (
         <button
