@@ -5,7 +5,7 @@ import { Icon, Spinner } from './ui'
 
 export function toolSummary(call: ToolCall): string {
   const a = call.args || {}
-  return String(a.path ?? a.command ?? a.pattern ?? '')
+  return String(a.path ?? a.command ?? a.pattern ?? a.url ?? a.title ?? a.id ?? '')
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -15,6 +15,13 @@ const TOOL_LABELS: Record<string, string> = {
   write_file: 'Write',
   edit_file: 'Edit',
   run_command: 'Run',
+  start_process: 'Start',
+  read_process_output: 'Logs',
+  stop_process: 'Stop',
+  list_processes: 'Processes',
+  http_request: 'HTTP',
+  browser_check: 'Browser',
+  github_create_pull_request: 'Pull request',
 }
 
 export function ToolArgs({ call }: { call: ToolCall }) {
@@ -40,7 +47,17 @@ export function ToolArgs({ call }: { call: ToolCall }) {
     )
   }
   if (call.name === 'write_file') return <pre className="tool-pre">{String(a.content ?? '')}</pre>
-  if (call.name === 'run_command') return <pre className="tool-pre">$ {String(a.command ?? '')}</pre>
+  if (call.name === 'run_command' || call.name === 'start_process') return <pre className="tool-pre">$ {String(a.command ?? '')}</pre>
+  if (call.name === 'github_create_pull_request') {
+    return (
+      <pre className="tool-pre">
+        {String(a.title ?? '')}
+        {a.base ? ` → ${String(a.base)}` : ''}
+        {'\n\n'}
+        {String(a.body ?? '')}
+      </pre>
+    )
+  }
   return <pre className="tool-pre">{JSON.stringify(a, null, 2)}</pre>
 }
 

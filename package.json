@@ -1,7 +1,7 @@
 {
   "name": "wicked-code",
   "productName": "Wicked Code",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A local-first Claude Code style desktop app for chat and coding, powered by Ollama with optional Gemini, Anthropic, DeepSeek and Grok APIs.",
   "main": "electron/main.cjs",
   "author": "Wicked Code",
@@ -15,8 +15,7 @@
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
-    "dist:linux": "npm run build && electron-builder --linux",
-    "release": "npm run build && electron-builder --publish always"
+    "dist:linux": "npm run build && electron-builder --linux"
   },
   "build": {
     "appId": "com.wicked.code",
@@ -32,24 +31,35 @@
     },
     "win": {
       "target": "nsis",
-      "artifactName": "Wicked-Code-Setup-${version}.${ext}"
+      "artifactName": "Wicked-Code-Setup.${ext}"
     },
     "mac": {
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "artifactName": "Wicked-Code-mac-${arch}.${ext}",
+      "category": "public.app-category.developer-tools"
     },
     "linux": {
-      "target": "AppImage"
+      "target": "AppImage",
+      "artifactName": "Wicked-Code-linux-${arch}.${ext}",
+      "category": "Development"
     },
     "publish": [
       {
         "provider": "github",
         "owner": "trendlinepros-afk",
-        "repo": "Wicked-code"
+        "repo": "Wicked-code",
+        "releaseType": "draft"
       }
-    ]
+    ],
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "Wicked Code"
+    }
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
@@ -69,5 +79,10 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
     "wait-on": "^9.5.1"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trendlinepros-afk/Wicked-code.git"
+  },
+  "homepage": "https://github.com/trendlinepros-afk/Wicked-code"
 }

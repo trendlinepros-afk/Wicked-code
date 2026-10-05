@@ -3,12 +3,17 @@ const fs = require('fs')
 const path = require('path')
 
 const PROVIDERS = ['anthropic', 'gemini', 'deepseek', 'grok']
+const SECRETS = [...PROVIDERS, 'github']
 
 const DEFAULTS = {
   vaultPath: null,
   ollamaUrl: 'http://127.0.0.1:11434',
   idleUnloadSeconds: 30,
-  contextLength: 8192,
+  contextLength: 16384,
+  maxAgentSteps: 100,
+  autoStartOllama: true,
+  stopOllamaOnExit: true,
+  cloneRoot: null, // default: ~/Wicked Code Repos
   selectedModel: 'ollama:qwen3.8:27b',
   permissionMode: 'ask', // 'ask' | 'auto-edits' | 'auto-all'
   useVaultMemory: true,
@@ -26,11 +31,23 @@ class Config {
     this.file = path.join(dir, 'config.json')
     this.safeStorage = safeStorage
     this.data = { ...DEFAULTS }
-    try {
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
-      this.data = { ...DEFAULTS, ...raw }
-    } catch {
-      /* first run */
+    // Settings survive app updates: they live in the user-data folder (never touched by installers),
+    // unknown/new keys get defaults, and a backup copy is used if the main file is ever unreadable.
+    for (const f of [this.file, this.file + '.bak']) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(f, 'utf8'))
+        this.data = { ...DEFAULTS, ...raw }
+        this.loadedFrom = f
+        break
+      } catch (e) {
+        if (f === this.file && fs.existsSync(f) && e instanceof SyntaxError) {
+          try {
+            fs.copyFileSync(f, `${f}.corrupt-${Date.now()}`)
+          } catch {
+            /* ignore */
+          }
+        }
+      }
     }
   }
 
@@ -38,6 +55,13 @@ class Config {
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
     const tmp = this.file + '.tmp'
     fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2))
+    if (fs.existsSync(this.file)) {
+      try {
+        fs.copyFileSync(this.file, this.file + '.bak')
+      } catch {
+        /* ignore */
+      }
+    }
     fs.renameSync(tmp, this.file)
   }
 
@@ -55,7 +79,7 @@ class Config {
   publicSettings() {
     const { apiKeys, ...rest } = this.data
     const keys = {}
-    for (const p of PROVIDERS) {
+    for (const p of SECRETS) {
       const k = this.getApiKey(p)
       keys[p] = k ? { set: true, hint: '…' + k.slice(-4) } : { set: false, hint: '' }
     }
@@ -63,7 +87,7 @@ class Config {
   }
 
   setApiKey(provider, key) {
-    if (!PROVIDERS.includes(provider)) throw new Error('Unknown provider ' + provider)
+    if (!SECRETS.includes(provider)) throw new Error('Unknown provider ' + provider)
     const keys = { ...this.data.apiKeys }
     if (!key) {
       delete keys[provider]
@@ -91,4 +115,4 @@ class Config {
   }
 }
 
-module.exports = { Config, PROVIDERS, DEFAULTS }
+module.exports = { Config, PROVIDERS, SECRETS, DEFAULTS }

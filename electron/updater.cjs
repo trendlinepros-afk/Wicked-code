@@ -54,9 +54,19 @@ class Updater extends EventEmitter {
     }
     try {
       this.set({ status: 'checking', error: null })
-      await this.wire().checkForUpdates()
+      let timer
+      const result = await Promise.race([
+        this.wire().checkForUpdates(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Timed out contacting GitHub. Check your internet connection.')), 60_000)
+        }),
+      ]).finally(() => clearTimeout(timer))
+      // electron-updater resolves with null (and emits nothing) when this build can't self-update.
+      if (result == null && this.state.status === 'checking') {
+        this.set({ status: 'unsupported', error: 'This copy of Wicked Code can’t update itself. Reinstall it from the latest installer.' })
+      }
     } catch (e) {
-      this.set({ status: 'error', error: String(e.message || e) })
+      if (['checking', 'idle'].includes(this.state.status)) this.set({ status: 'error', error: String(e.message || e) })
     }
     return this.state
   }

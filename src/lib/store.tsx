@@ -3,6 +3,7 @@ import {
   api,
   type AppInfo,
   type CloudModel,
+  type LauncherState,
   type GpuStats,
   type LocalModel,
   type ModelState,
@@ -25,6 +26,7 @@ interface AppStore {
   selectModel(id: string): Promise<void>
   appInfo: AppInfo | null
   update: UpdateState | null
+  launcher: LauncherState | null
 }
 
 const Ctx = createContext<AppStore | null>(null)
@@ -45,6 +47,7 @@ export function AppProvider({ initial, children }: { initial: Settings; children
   const [pulls, setPulls] = useState<Record<string, PullProgress>>({})
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [update, setUpdate] = useState<UpdateState | null>(null)
+  const [launcher, setLauncher] = useState<LauncherState | null>(null)
   const refreshing = useRef(false)
   const wasRunning = useRef(true)
 
@@ -72,8 +75,16 @@ export function AppProvider({ initial, children }: { initial: Settings; children
   useEffect(() => {
     api().app.info().then(setAppInfo)
     api().updater.state().then(setUpdate)
-    return api().updater.onStatus(setUpdate)
-  }, [])
+    const offUpdate = api().updater.onStatus(setUpdate)
+    const offLauncher = api().ollama.onLauncher((s) => {
+      setLauncher(s)
+      if (s.status === 'running') refreshModels()
+    })
+    return () => {
+      offUpdate()
+      offLauncher()
+    }
+  }, [refreshModels])
 
   // Re-list cloud models when API keys change.
   const keySig = Object.values(settings.apiKeys).map((k) => k.hint).join('|')
@@ -89,6 +100,7 @@ export function AppProvider({ initial, children }: { initial: Settings; children
         const g = await api().gpu.stats()
         if (alive) setGpu(g)
         const st = await api().ollama.status()
+        if (alive) setLauncher(st.launcher)
         if (alive) {
           if (!wasRunning.current && st.running) refreshModels()
           wasRunning.current = st.running
@@ -156,8 +168,9 @@ export function AppProvider({ initial, children }: { initial: Settings; children
       selectModel,
       appInfo,
       update,
+      launcher,
     }),
-    [settings, modelState, gpu, ollamaRunning, localModels, cloudModels, refreshModels, pulls, startPull, selectModel, appInfo, update],
+    [settings, modelState, gpu, ollamaRunning, localModels, cloudModels, refreshModels, pulls, startPull, selectModel, appInfo, update, launcher],
   )
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

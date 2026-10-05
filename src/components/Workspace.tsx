@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, parseModelId, uid, type Message, type Mode, type Session, type SessionMeta, type ToolCall } from '../lib/api'
+import { api, parseModelId, uid, type Message, type Mode, type ProcessInfo, type Session, type SessionMeta, type ToolCall } from '../lib/api'
 import { useApp } from '../lib/store'
 import { MessageList, ToolArgs, EmptyIcon } from './Messages'
 import { ModelPicker } from './ModelPicker'
 import { ConfirmDialog, Icon, basename } from './ui'
+import { NewCodeSessionDialog } from './NewCodeSession'
 
 interface RunState {
   runId: string
@@ -26,7 +27,20 @@ const forModel = (msgs: Message[]) =>
     .filter((m) => !(m.role === 'assistant' && m.isError))
     .map(({ thinking: _t, model: _m, ...rest }) => rest)
 
-export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visible: boolean; onManageModels(): void }) {
+const SHIP_PROMPT =
+  'Review the changes, run the tests to make sure everything passes, then commit with a clear message, push the branch, and open a pull request describing what changed and how it was tested.'
+
+export function Workspace({
+  mode,
+  visible,
+  onManageModels,
+  onOpenGithubSettings,
+}: {
+  mode: Mode
+  visible: boolean
+  onManageModels(): void
+  onOpenGithubSettings(): void
+}) {
   const { settings, modelState } = useApp()
   const [metas, setMetas] = useState<SessionMeta[]>([])
   const [active, setActive] = useState<Session | null>(null)
@@ -34,6 +48,8 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
   const [input, setInput] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<SessionMeta | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [showNewCode, setShowNewCode] = useState(false)
+  const [procs, setProcs] = useState<ProcessInfo[]>([])
   const runRef = useRef<RunState | null>(null)
   const lastTouch = useRef(0)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -57,6 +73,24 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
   useEffect(() => {
     refreshList()
   }, [refreshList])
+
+  // Background processes (dev servers etc.) started by the agent.
+  useEffect(() => {
+    if (mode !== 'code') return
+    api().processes.list().then(setProcs)
+    return api().processes.onChanged(setProcs)
+  }, [mode])
+
+  /** Refresh the GitHub branch shown for a code session (the agent may switch branches). */
+  const refreshRepo = useCallback(async (s: Session) => {
+    if (s.mode !== 'code' || !s.folders[0]) return s
+    const info = await api().github.repoInfo(s.folders[0]).catch(() => null)
+    const github = info ? { fullName: info.fullName, branch: info.branch, url: info.url } : null
+    if (JSON.stringify(github) === JSON.stringify(s.github ?? null)) return s
+    const next = { ...s, github }
+    setActive((cur) => (cur?.id === s.id ? { ...cur, github } : cur))
+    return next
+  }, [])
 
   // Stream agent events for our run.
   useEffect(
@@ -108,8 +142,10 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
   const openSession = async (id: string) => {
     if (active?.id === id) return
     try {
-      setActive(await api().sessions.load(id))
+      const s = await api().sessions.load(id)
+      setActive(s)
       setError(null)
+      refreshRepo(s)
       stickToBottom.current = true
     } catch (e) {
       setError(String((e as Error).message || e))
@@ -119,9 +155,8 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
   const startNew = async () => {
     if (!settings.selectedModel) return setError('Select a model first.')
     if (mode === 'code') {
-      const folder = await api().dialog.pickFolder('Choose the project working folder for this code session')
-      if (!folder) return
-      setActive(newSession('code', settings.selectedModel, [folder]))
+      setShowNewCode(true)
+      return
     } else {
       setActive(null)
     }
@@ -197,21 +232,42 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
     setRun(runRef.current)
 
     let failure: string | null = null
+    let result: { messages: Message[]; aborted: boolean } | null = null
     try {
-      await api().agent.run({ runId, mode, modelId, history: forModel(session.messages), folders: session.folders })
+      result = await api().agent.run({
+        runId,
+        mode,
+        modelId,
+        history: forModel(session.messages),
+        folders: session.folders,
+        sessionId: session.id,
+        autoApprove: session.autoApprove,
+      })
     } catch (e) {
       failure = String((e as Error).message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
     }
     const r = runRef.current!
-    const produced = [...r.produced]
-    // Keep partial text if the run was stopped mid-stream.
-    if (r.liveText) produced.push({ role: 'assistant', content: r.liveText + '\n\n*(stopped)*', model: parseModelId(modelId).model })
+    const modelName = parseModelId(modelId).model
+    let produced: Message[]
+    if (result && !result.aborted) {
+      // The main process's list is authoritative: streamed events can arrive after the run's reply.
+      let ai = 0
+      const streamedAssistants = r.produced.filter((m) => m.role === 'assistant')
+      produced = result.messages.map((m) => (m.role === 'assistant' ? { ...m, model: modelName, thinking: streamedAssistants[ai++]?.thinking } : m))
+    } else {
+      produced = [...r.produced]
+      // Keep partial text if the run was stopped mid-stream.
+      if (r.liveText) produced.push({ role: 'assistant', content: r.liveText + '\n\n*(stopped)*', model: modelName })
+    }
     if (failure) produced.push({ role: 'assistant', content: failure, isError: true })
     for (const n of r.notices) produced.unshift({ role: 'assistant', content: n, isError: true })
     runRef.current = null
     setRun(null)
 
-    const finished = { ...session, messages: [...session.messages, ...produced], updatedAt: new Date().toISOString() }
+    // The session may have been switched to auto-approve during the run.
+    const autoApprove = session.autoApprove || runAutoApprove.current === session.id
+    let finished: Session = { ...session, autoApprove, messages: [...session.messages, ...produced], updatedAt: new Date().toISOString() }
+    finished = await refreshRepo(finished)
     setActive((cur) => (cur?.id === finished.id ? finished : cur))
     const saved = await persist(finished)
     setActive((cur) => (cur?.id === saved.id ? saved : cur))
@@ -219,9 +275,16 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
 
   const stop = () => run && api().agent.stop(run.runId)
 
-  const answerApproval = (requestId: string, allowed: boolean) => {
+  const runAutoApprove = useRef<string | null>(null)
+  const answerApproval = (requestId: string, allowed: boolean | 'all') => {
     api().agent.approve(requestId, allowed)
-    updateRun((r) => ({ ...r, approvals: r.approvals.filter((a) => a.requestId !== requestId) }))
+    if (allowed === 'all') {
+      runAutoApprove.current = runRef.current?.sessionId ?? null
+      updateRun((r) => ({ ...r, approvals: [] }))
+      setActive((cur) => (cur ? { ...cur, autoApprove: true } : cur))
+    } else {
+      updateRun((r) => ({ ...r, approvals: r.approvals.filter((a) => a.requestId !== requestId) }))
+    }
   }
 
   const doDelete = async (m: SessionMeta) => {
@@ -232,6 +295,7 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
   }
 
   const runningHere = !!run && run.sessionId === active?.id
+  const sessionProcs = procs.filter((p) => p.status === 'running' && p.owner === active?.id)
   const messages = active ? [...active.messages, ...(runningHere ? run!.produced : [])] : []
   const folders = active?.folders ?? []
   const needsFolder = mode === 'code' && !folders.length
@@ -269,12 +333,42 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
       </aside>
 
       <section className="main-pane">
-        {active?.notePath && (
+        {active && (active.notePath || active.mode === 'code') && (
           <div className="pane-head">
             <div className="pane-title">{active.title}</div>
-            <button className="btn btn-ghost btn-sm" onClick={() => api().shell.openPath(active.notePath!)} title="Open the Markdown note in your vault">
-              <Icon name="book" size={14} /> Open note
-            </button>
+            {active.github && (
+              <a className="repo-badge" href={active.github.url} target="_blank" rel="noreferrer" title="Open on GitHub">
+                <Icon name="github" size={13} /> {active.github.fullName}
+                {active.github.branch && <span className="repo-branch">{active.github.branch}</span>}
+              </a>
+            )}
+            {active.autoApprove && (
+              <button
+                className="pill accent auto-pill"
+                title="Actions run without asking in this session. Click to ask again."
+                onClick={async () => {
+                  const next = { ...active, autoApprove: false }
+                  setActive(next)
+                  if (next.messages.length) await persist(next)
+                }}
+              >
+                auto-approve ✕
+              </button>
+            )}
+            <span className="topbar-spacer" />
+            {sessionProcs.map((p) => (
+              <span key={p.id} className="proc-chip" title={`${p.command}\n${p.cwd}`}>
+                <span className="proc-dot" /> {p.command.length > 28 ? p.command.slice(0, 28) + '…' : p.command}
+                <button title="Stop process" onClick={() => api().processes.stop(p.id)}>
+                  <Icon name="stop" size={11} />
+                </button>
+              </span>
+            ))}
+            {active.notePath && (
+              <button className="btn btn-ghost btn-sm" onClick={() => api().shell.openPath(active.notePath!)} title="Open the Markdown note in your vault">
+                <Icon name="book" size={14} /> Open note
+              </button>
+            )}
           </div>
         )}
         <div
@@ -323,12 +417,23 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
               run!.approvals.map((a) => (
                 <div key={a.requestId} className="approval">
                   <div className="approval-title">
-                    {a.call.name === 'run_command' ? 'Run this command?' : a.call.name === 'edit_file' ? `Edit ${String(a.call.args.path)}?` : `Write ${String(a.call.args.path)}?`}
+                    {a.call.name === 'run_command'
+                      ? 'Run this command?'
+                      : a.call.name === 'start_process'
+                        ? 'Start this background process?'
+                        : a.call.name === 'github_create_pull_request'
+                          ? 'Open this pull request on GitHub?'
+                          : a.call.name === 'edit_file'
+                            ? `Edit ${String(a.call.args.path)}?`
+                            : `Write ${String(a.call.args.path)}?`}
                   </div>
                   <ToolArgs call={a.call} />
                   <div className="approval-actions">
                     <button className="btn" onClick={() => answerApproval(a.requestId, false)}>
                       Deny
+                    </button>
+                    <button className="btn" onClick={() => answerApproval(a.requestId, 'all')} title="Stop asking for the rest of this session">
+                      Allow all for this session
                     </button>
                     <button className="btn btn-primary" onClick={() => answerApproval(a.requestId, true)}>
                       Allow
@@ -375,7 +480,13 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
               }}
             />
             <div className="composer-bar">
-              <span className="muted small">{runningHere ? 'Generating…' : 'Enter to send · Shift+Enter for new line'}</span>
+              {mode === 'code' && active?.github && !run ? (
+                <button className="ship-chip" onClick={() => setInput(SHIP_PROMPT)} title="Fill in a prompt that commits, pushes and opens a pull request">
+                  <Icon name="github" size={12} /> Commit, push &amp; open PR
+                </button>
+              ) : (
+                <span className="muted small">{runningHere ? 'Generating…' : 'Enter to send · Shift+Enter for new line'}</span>
+              )}
               <div className="composer-right">
                 <ModelPicker disabled={!!run || modelBusy} onManage={onManageModels} />
                 {run ? (
@@ -393,6 +504,25 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
         </div>
       </section>
 
+      {showNewCode && (
+        <NewCodeSessionDialog
+          onCancel={() => setShowNewCode(false)}
+          onOpenSettings={() => {
+            setShowNewCode(false)
+            onOpenGithubSettings()
+          }}
+          onDone={({ folder, github }) => {
+            setShowNewCode(false)
+            const s = newSession('code', settings.selectedModel || '', [folder])
+            s.github = github ? { fullName: github.fullName, branch: github.branch, url: github.url } : null
+            if (github) s.title = `${github.repo} · ${github.branch ?? ''}`.trim()
+            setActive(s)
+            setError(null)
+            setInput('')
+            inputRef.current?.focus()
+          }}
+        />
+      )}
       {confirmDelete && (
         <ConfirmDialog
           title="Delete session?"

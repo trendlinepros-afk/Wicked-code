@@ -25,7 +25,7 @@ export function App() {
 }
 
 function Shell() {
-  const { ollamaRunning, settings } = useApp()
+  const { ollamaRunning, settings, launcher } = useApp()
   useTheme(settings.theme)
   const [mode, setMode] = useState<Mode>('chat')
   const [settingsPage, setSettingsPage] = useState<SettingsPage | null>(null)
@@ -42,12 +42,44 @@ function Shell() {
       />
       {!ollamaRunning && !settingsPage && (
         <div className="banner">
-          Ollama isn’t reachable at {settings.ollamaUrl}. Local models are unavailable until it’s running — cloud models still work.
+          {launcher?.status === 'starting' ? (
+            <>Starting Ollama…</>
+          ) : launcher?.status === 'not-installed' ? (
+            <>
+              Ollama isn’t installed, so local models are unavailable (cloud models still work).{' '}
+              <a href="https://ollama.com/download" target="_blank" rel="noreferrer">
+                Download Ollama
+              </a>{' '}
+              then{' '}
+              <button className="link-btn" onClick={() => api().ollama.start()}>
+                start it
+              </button>
+              .
+            </>
+          ) : (
+            <>
+              Ollama isn’t reachable at {settings.ollamaUrl}
+              {launcher?.error ? ` (${launcher.error})` : ''}. Local models are unavailable — cloud models still work.{' '}
+              <button className="link-btn" onClick={() => api().ollama.start()}>
+                Start Ollama
+              </button>
+            </>
+          )}
         </div>
       )}
       <div className="app-body">
-        <Workspace mode="chat" visible={!settingsPage && mode === 'chat'} onManageModels={() => setSettingsPage('models')} />
-        <Workspace mode="code" visible={!settingsPage && mode === 'code'} onManageModels={() => setSettingsPage('models')} />
+        <Workspace
+          mode="chat"
+          visible={!settingsPage && mode === 'chat'}
+          onManageModels={() => setSettingsPage('models')}
+          onOpenGithubSettings={() => setSettingsPage('github')}
+        />
+        <Workspace
+          mode="code"
+          visible={!settingsPage && mode === 'code'}
+          onManageModels={() => setSettingsPage('models')}
+          onOpenGithubSettings={() => setSettingsPage('github')}
+        />
         {settingsPage && <SettingsView page={settingsPage} onPage={setSettingsPage} onClose={() => setSettingsPage(null)} />}
       </div>
       <StatusBar />

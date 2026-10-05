@@ -15,8 +15,13 @@ export interface Settings {
   permissionMode: PermissionMode
   useVaultMemory: boolean
   theme: Theme
+  maxAgentSteps: number
+  autoStartOllama: boolean
+  stopOllamaOnExit: boolean
+  cloneRoot: string | null
+  cloneRootResolved: string
   modelNotes: Record<string, string>
-  apiKeys: Record<CloudProvider, { set: boolean; hint: string }>
+  apiKeys: Record<CloudProvider | 'github', { set: boolean; hint: string }>
 }
 
 export interface ToolCall {
@@ -36,6 +41,43 @@ export interface Message {
   thinking?: string
 }
 
+export interface RepoInfo {
+  owner: string
+  repo: string
+  fullName: string
+  branch: string | null
+  dirty: number
+  url: string
+}
+
+export interface GithubRepo {
+  fullName: string
+  description: string | null
+  private: boolean
+  defaultBranch: string
+  pushedAt: string
+  language: string | null
+  url: string
+}
+
+export interface ProcessInfo {
+  id: string
+  command: string
+  cwd: string
+  owner: string | null
+  pid: number
+  status: 'running' | 'exited'
+  exitCode: number | string | null
+  startedAt: number
+}
+
+export interface LauncherState {
+  status: 'unknown' | 'running' | 'starting' | 'stopped' | 'not-installed' | 'error'
+  startedByApp: boolean
+  error: string | null
+  binary: string | null
+}
+
 export interface SessionMeta {
   id: string
   title: string
@@ -49,6 +91,8 @@ export interface SessionMeta {
 export interface Session extends SessionMeta {
   messages: Message[]
   notePath?: string
+  github?: { fullName: string; branch: string | null; url: string } | null
+  autoApprove?: boolean
 }
 
 export interface LocalModel {
@@ -130,7 +174,7 @@ export interface WickedApi {
     set<K extends keyof Settings>(key: K, value: Settings[K]): Promise<Settings>
   }
   apiKeys: {
-    set(provider: CloudProvider, key: string): Promise<Settings>
+    set(provider: CloudProvider | 'github', key: string): Promise<Settings>
     test(provider: CloudProvider, key?: string): Promise<{ ok: boolean; error?: string }>
   }
   dialog: { pickFolder(title?: string): Promise<string | null> }
@@ -146,7 +190,25 @@ export interface WickedApi {
     save(s: Session): Promise<Session>
     delete(id: string): Promise<void>
   }
-  ollama: { status(): Promise<{ running: boolean; url: string }> }
+  ollama: {
+    status(): Promise<{ running: boolean; url: string; launcher: LauncherState }>
+    start(): Promise<LauncherState>
+    onLauncher(cb: (s: LauncherState) => void): Unsub
+  }
+  github: {
+    user(): Promise<{ login: string; name: string | null; url: string }>
+    test(token?: string): Promise<{ login: string; name: string | null; url: string }>
+    repos(): Promise<GithubRepo[]>
+    branches(fullName: string): Promise<string[]>
+    clone(p: { fullName: string; baseBranch?: string; newBranch?: string }): Promise<{ path: string; info: RepoInfo | null }>
+    repoInfo(dir: string): Promise<RepoInfo | null>
+    suggestBranch(title: string): Promise<string>
+  }
+  processes: {
+    list(): Promise<ProcessInfo[]>
+    stop(id: string): Promise<boolean>
+    onChanged(cb: (list: ProcessInfo[]) => void): Unsub
+  }
   models: {
     listLocal(): Promise<{ running: boolean; models: LocalModel[] }>
     listCloud(): Promise<CloudModel[]>
@@ -173,12 +235,20 @@ export interface WickedApi {
     onStatus(cb: (s: UpdateState) => void): Unsub
   }
   agent: {
-    run(p: { runId: string; mode: Mode; modelId: string; history: Message[]; folders: string[] }): Promise<{
+    run(p: {
+      runId: string
+      mode: Mode
+      modelId: string
+      history: Message[]
+      folders: string[]
+      sessionId: string
+      autoApprove?: boolean
+    }): Promise<{
       messages: Message[]
       aborted: boolean
     }>
     stop(runId: string): Promise<void>
-    approve(requestId: string, allowed: boolean): Promise<void>
+    approve(requestId: string, allowed: boolean | 'all'): Promise<void>
     onEvent(cb: (e: AgentEvent) => void): Unsub
   }
 }

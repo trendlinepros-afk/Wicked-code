@@ -9,6 +9,13 @@ const { listCloudModels, testApiKey } = require('./providers.cjs')
 const { runAgent } = require('./agent.cjs')
 const { Vault, setupVault, inspectVault } = require('./vault.cjs')
 const { Updater } = require('./updater.cjs')
+const { ProcessManager } = require('./processes.cjs')
+const { GitHub, repoInfo, slugify } = require('./github.cjs')
+const { OllamaLauncher } = require('./ollamaLauncher.cjs')
+const os = require('os')
+
+// Pin the settings folder so it never changes between versions; app updates don't touch it.
+app.setPath('userData', path.join(app.getPath('appData'), 'Wicked Code'))
 
 let win = null
 let config
@@ -16,9 +23,13 @@ let ollama
 let models
 let vault
 let updater
+let processes
+let github
+let launcher
 let quitting = false
 const runs = new Map() // runId -> AbortController
 const approvals = new Map() // requestId -> resolve
+const runAllowAll = new Set() // runIds where the user chose "allow all for this session"
 const pulls = new Map() // model name -> AbortController
 
 function send(channel, payload) {
@@ -62,19 +73,79 @@ function createWindow() {
   else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
 }
 
+/**
+ * Load a local page in a hidden browser window and report what happened: title, visible text,
+ * console messages, page errors and failed requests. Used by the agent's browser_check tool.
+ */
+async function browserCheck({ url, waitMs = 1500, script }) {
+  const check = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 900,
+    webPreferences: { partition: 'wicked-check', sandbox: true, contextIsolation: true, nodeIntegration: false },
+  })
+  const consoleLines = []
+  const failed = []
+  check.webContents.on('console-message', (e) => {
+    const msg = String(e.message ?? '')
+    if (msg.includes('Electron Security Warning')) return // Electron's own dev warning, not the page's
+    const src = e.sourceId ? ` (${String(e.sourceId).split('/').pop()}:${e.lineNumber})` : ''
+    if (consoleLines.length < 80) consoleLines.push(`[${e.level}] ${msg}${src}`)
+  })
+  check.webContents.on('did-fail-load', (_e, code, desc, failedUrl) => failed.push(`${failedUrl}: ${desc} (${code})`))
+  check.webContents.session.webRequest.onCompleted((d) => {
+    if (d.statusCode >= 400 && failed.length < 40) failed.push(`${d.method} ${d.url} → HTTP ${d.statusCode}`)
+  })
+  check.webContents.session.webRequest.onErrorOccurred((d) => {
+    if (failed.length < 40) failed.push(`${d.method} ${d.url} → ${d.error}`)
+  })
+  try {
+    const loaded = check.loadURL(url).then(() => null, (e) => String(e.message || e))
+    const loadError = await Promise.race([loaded, new Promise((r) => setTimeout(() => r('Timed out after 30s waiting for the page to load'), 30_000))])
+    await new Promise((r) => setTimeout(r, Math.min(Math.max(waitMs, 0), 20_000)))
+    const page = await check.webContents
+      .executeJavaScript(`({ title: document.title, url: location.href, text: (document.body && document.body.innerText || '').slice(0, 6000), elements: document.querySelectorAll('*').length })`)
+      .catch((e) => ({ title: '', url, text: '', elements: 0, error: String(e.message || e) }))
+    let scriptResult = null
+    if (script) {
+      scriptResult = await check.webContents
+        .executeJavaScript(`Promise.resolve((async () => (${script}))()).then((v) => { try { return JSON.stringify(v, null, 2) } catch { return String(v) } })`)
+        .catch((e) => 'Script error: ' + String(e.message || e))
+      await new Promise((r) => setTimeout(r, 300))
+    }
+    return [
+      loadError ? `LOAD ERROR: ${loadError}` : `Loaded ${page.url}`,
+      `Title: ${page.title || '(none)'} · ${page.elements} elements`,
+      scriptResult !== null ? `\n--- script result ---\n${scriptResult}` : '',
+      `\n--- console (${consoleLines.length}) ---\n${consoleLines.join('\n') || '(no console output)'}`,
+      `\n--- failed requests (${failed.length}) ---\n${failed.join('\n') || '(none)'}`,
+      `\n--- visible text ---\n${page.text || '(page is blank)'}`,
+    ].join('\n')
+  } finally {
+    check.destroy()
+  }
+}
+
+function cloneRoot() {
+  return config.get('cloneRoot') || path.join(os.homedir(), 'Wicked Code Repos')
+}
+
 function handle(channel, fn) {
   ipcMain.handle(channel, async (_e, ...args) => fn(...args))
 }
 
 function registerIpc() {
   // ----- settings -----
-  handle('settings:get', () => config.publicSettings())
+  handle('settings:get', () => ({ ...config.publicSettings(), cloneRootResolved: cloneRoot() }))
   handle('settings:set', (key, value) => {
-    const allowed = ['ollamaUrl', 'idleUnloadSeconds', 'permissionMode', 'useVaultMemory', 'contextLength', 'theme']
+    const allowed = [
+      'ollamaUrl', 'idleUnloadSeconds', 'permissionMode', 'useVaultMemory', 'contextLength', 'theme',
+      'maxAgentSteps', 'autoStartOllama', 'stopOllamaOnExit', 'cloneRoot',
+    ]
     if (!allowed.includes(key)) throw new Error('Setting not editable: ' + key)
     config.set(key, value)
     if (key === 'theme') applyTheme()
-    return config.publicSettings()
+    return { ...config.publicSettings(), cloneRootResolved: cloneRoot() }
   })
   handle('apiKeys:set', (provider, key) => {
     config.setApiKey(provider, (key || '').trim())
@@ -105,7 +176,21 @@ function registerIpc() {
   handle('sessions:delete', (id) => vault.remove(id))
 
   // ----- models -----
-  handle('ollama:status', async () => ({ running: await ollama.isRunning(), url: config.get('ollamaUrl') }))
+  handle('ollama:status', async () => ({ running: await ollama.isRunning(), url: config.get('ollamaUrl'), launcher: launcher.state }))
+  handle('ollama:start', () => launcher.ensure())
+
+  // ----- GitHub -----
+  handle('github:user', () => github.user())
+  handle('github:test', (token) => github.user((token || '').trim() || github.token()))
+  handle('github:repos', () => github.listRepos())
+  handle('github:branches', (fullName) => github.branches(fullName))
+  handle('github:clone', ({ fullName, baseBranch, newBranch }) => github.clone({ fullName, cloneRoot: cloneRoot(), baseBranch, newBranch }))
+  handle('github:repoInfo', (dir) => repoInfo(dir))
+  handle('github:suggestBranch', (title) => `wicked/${slugify(title)}-${Date.now().toString(36).slice(-4)}`)
+
+  // ----- background processes -----
+  handle('processes:list', () => processes.list())
+  handle('processes:stop', (id) => processes.stop(id))
   handle('models:listLocal', async () => {
     if (!(await ollama.isRunning())) return { running: false, models: [] }
     return { running: true, models: await ollama.list() }
@@ -194,7 +279,7 @@ function registerIpc() {
   })
 
   // ----- agent -----
-  handle('agent:run', async ({ runId, mode, modelId, history, folders }) => {
+  handle('agent:run', async ({ runId, mode, modelId, history, folders, sessionId, autoApprove }) => {
     const { provider, model } = parseModelId(modelId)
     const ac = new AbortController()
     runs.set(runId, ac)
@@ -203,7 +288,17 @@ function registerIpc() {
     const emit = (type, payload = {}) => send('agent:event', { runId, type, ...payload })
     try {
       const memory = config.get('useVaultMemory') ? await vault.readMemory() : null
+      if (autoApprove) runAllowAll.add(runId)
+      const ghToken = config.getApiKey('github')
+      const info = mode === 'code' && folders?.[0] ? await repoInfo(folders[0]) : null
+      const ghTools = info && ghToken ? { info, createPullRequest: (args) => github.createPullRequest(folders[0], args) } : null
       const produced = await runAgent({
+        owner: sessionId,
+        processes: mode === 'code' ? processes : null,
+        browserCheck: mode === 'code' ? browserCheck : null,
+        github: ghTools,
+        env: github.authEnv(),
+        maxSteps: Number(config.get('maxAgentSteps')) || 100,
         mode,
         provider,
         model,
@@ -218,6 +313,7 @@ function registerIpc() {
         emit,
         requestApproval: (call) =>
           new Promise((resolve) => {
+            if (runAllowAll.has(runId)) return resolve(true)
             const requestId = `${runId}:${call.id}`
             approvals.set(requestId, resolve)
             ac.signal.addEventListener('abort', () => resolve(false), { once: true })
@@ -230,11 +326,24 @@ function registerIpc() {
       throw e
     } finally {
       runs.delete(runId)
+      runAllowAll.delete(runId)
       models.endBusy()
     }
   })
   handle('agent:stop', (runId) => runs.get(runId)?.abort())
   handle('agent:approve', (requestId, allowed) => {
+    // allowed: true | false | 'all' (approve this and everything else for the rest of the run)
+    if (allowed === 'all') {
+      const runId = requestId.slice(0, requestId.indexOf(':'))
+      runAllowAll.add(runId)
+      // Release any other approvals already waiting in this run.
+      for (const [id, resolve] of approvals) {
+        if (id.startsWith(runId + ':')) {
+          resolve(true)
+          approvals.delete(id)
+        }
+      }
+    }
     approvals.get(requestId)?.(!!allowed)
     approvals.delete(requestId)
   })
@@ -258,6 +367,16 @@ app.whenReady().then(() => {
     getAutoUpdater: () => require('electron-updater').autoUpdater,
   })
   updater.on('status', (s) => send('updater:status', s))
+  processes = new ProcessManager()
+  processes.on('change', (list) => send('processes:changed', list))
+  github = new GitHub(() => config.getApiKey('github'))
+  launcher = new OllamaLauncher({
+    ollama,
+    getUrl: () => config.get('ollamaUrl'),
+    logFile: path.join(app.getPath('userData'), 'ollama.log'),
+  })
+  launcher.on('state', (s) => send('ollama:launcher', s))
+  if (config.get('autoStartOllama') !== false) launcher.ensure()
 
   if (app.isPackaged) {
     session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
@@ -274,6 +393,13 @@ app.whenReady().then(() => {
   createWindow()
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow())
 })
+
+function cleanupOnExit() {
+  processes?.stopAll()
+  if (config?.get('stopOllamaOnExit') !== false) launcher?.stop()
+}
+
+app.on('will-quit', cleanupOnExit)
 
 app.on('before-quit', async (e) => {
   if (quitting || !models || !models.isLocal() || models.status !== 'loaded') return

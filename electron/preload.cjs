@@ -21,7 +21,17 @@ contextBridge.exposeInMainWorld('wicked', {
     save: invoke('sessions:save'),
     delete: invoke('sessions:delete'),
   },
-  ollama: { status: invoke('ollama:status') },
+  ollama: { status: invoke('ollama:status'), start: invoke('ollama:start'), onLauncher: subscribe('ollama:launcher') },
+  github: {
+    user: invoke('github:user'),
+    test: invoke('github:test'),
+    repos: invoke('github:repos'),
+    branches: invoke('github:branches'),
+    clone: invoke('github:clone'),
+    repoInfo: invoke('github:repoInfo'),
+    suggestBranch: invoke('github:suggestBranch'),
+  },
+  processes: { list: invoke('processes:list'), stop: invoke('processes:stop'), onChanged: subscribe('processes:changed') },
   models: {
     listLocal: invoke('models:listLocal'),
     listCloud: invoke('models:listCloud'),

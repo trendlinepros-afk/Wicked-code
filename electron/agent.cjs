@@ -12,11 +12,16 @@ const IGNORED_DIRS = new Set([
   '.venv', 'venv', 'target', '.idea', '.vscode', '.obsidian', 'coverage', '.turbo',
 ])
 const MAX_READ_BYTES = 200_000
-const MAX_TOOL_OUTPUT = 30_000
-const MAX_STEPS = 40
+const MAX_TOOL_OUTPUT = 16_000
+const DEFAULT_MAX_STEPS = 100
 
-const truncate = (s, n = MAX_TOOL_OUTPUT) =>
-  s.length > n ? s.slice(0, n) + `\n… [truncated ${s.length - n} characters]` : s
+/** Shorten long text, keeping the start and (mostly) the end, where errors and test summaries usually are. */
+function truncate(s, n = MAX_TOOL_OUTPUT) {
+  if (s.length <= n) return s
+  const head = Math.floor(n * 0.25)
+  const tail = n - head
+  return s.slice(0, head) + `\n… [${s.length - n} characters omitted] …\n` + s.slice(s.length - tail)
+}
 
 // ---------- Tool definitions ----------
 
@@ -90,18 +95,117 @@ const WRITE_TOOLS = [
   {
     name: 'run_command',
     description:
-      'Run a shell command in the working folder (e.g. tests, builds, git). Returns exit code, stdout and stderr. Times out after 120s.',
+      'Run a shell command in the working folder and wait for it to finish (tests, builds, installs, git, scripts). Returns exit code, stdout and stderr. Do NOT use this for servers or apps that keep running — use start_process for those.',
     parameters: {
       type: 'object',
-      properties: { command: { type: 'string', description: 'The shell command to run.' } },
+      properties: {
+        command: { type: 'string', description: 'The shell command to run.' },
+        timeout_seconds: { type: 'number', description: 'Max seconds to wait (default 120, max 900).' },
+      },
       required: ['command'],
     },
   },
 ]
 
-function toolsFor(mode, folders) {
+const PROCESS_TOOLS = [
+  {
+    name: 'start_process',
+    description:
+      'Start a long-running command in the background (dev server, web app, API, watcher, GUI app) in the working folder. Waits until ready_pattern appears in the output (or wait_seconds pass) and returns the output so far plus a process id. Use read_process_output to check logs later and stop_process when done.',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Command to start, e.g. "npm run dev" or "python app.py".' },
+        ready_pattern: { type: 'string', description: 'Optional regex that signals the process is ready, e.g. "listening|ready|localhost:\\d+".' },
+        wait_seconds: { type: 'number', description: 'How long to wait for startup output (default 8, max 60).' },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    name: 'read_process_output',
+    description: 'Read new output (logs, errors) from a background process since the last read, and whether it is still running.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Process id from start_process.' },
+        wait_seconds: { type: 'number', description: 'Optionally wait this many seconds for more output first (max 60).' },
+        all: { type: 'boolean', description: 'Return the whole buffered log instead of only new output.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'stop_process',
+    description: 'Stop a background process (and its child processes).',
+    parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+  },
+  {
+    name: 'list_processes',
+    description: 'List background processes started in this session with their status.',
+    parameters: { type: 'object', properties: {} },
+  },
+]
+
+const TEST_TOOLS = [
+  {
+    name: 'http_request',
+    description:
+      'Send an HTTP request to a locally running server (localhost / 127.0.0.1 only) to test an API or web app you started. Returns status, headers and body.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'e.g. http://localhost:3000/api/health' },
+        method: { type: 'string', description: 'GET (default), POST, PUT, PATCH, DELETE…' },
+        headers: { type: 'object', description: 'Optional request headers.' },
+        body: { type: 'string', description: 'Optional request body (send JSON as a string and set Content-Type).' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'browser_check',
+    description:
+      'Open a local web page (http://localhost… or an .html file in the working folder) in a real headless browser, run its JavaScript, and report the page title, visible text, console errors/warnings and failed network requests. Use it to verify a web UI actually renders and works.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'http://localhost:PORT/path or a path to an .html file.' },
+        wait_ms: { type: 'number', description: 'Extra time to wait after load for scripts to run (default 1500).' },
+        script: { type: 'string', description: 'Optional JavaScript expression evaluated in the page after load; its result is returned (e.g. to click a button and read the result).' },
+      },
+      required: ['url'],
+    },
+  },
+]
+
+const GITHUB_TOOLS = [
+  {
+    name: 'github_create_pull_request',
+    description:
+      'Open a pull request on GitHub for the current branch. Commit and `git push -u origin <branch>` with run_command first.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        body: { type: 'string', description: 'Markdown description of the change and how it was tested.' },
+        base: { type: 'string', description: 'Branch to merge into (defaults to the repository default branch).' },
+        draft: { type: 'boolean' },
+      },
+      required: ['title'],
+    },
+  },
+]
+
+/** @param {{processes?: boolean, browser?: boolean, github?: boolean}} caps */
+function toolsFor(mode, folders, caps = {}) {
   if (!folders.length) return []
-  return mode === 'code' ? [...READ_TOOLS, ...WRITE_TOOLS] : READ_TOOLS
+  if (mode !== 'code') return READ_TOOLS
+  const tools = [...READ_TOOLS, ...WRITE_TOOLS]
+  if (caps.processes) tools.push(...PROCESS_TOOLS)
+  tools.push(...TEST_TOOLS.filter((t) => t.name !== 'browser_check' || caps.browser))
+  if (caps.github) tools.push(...GITHUB_TOOLS)
+  return tools
 }
 
 // ---------- Path safety ----------
@@ -148,14 +252,14 @@ async function walk(dir, depth, out, root, limit = 800) {
   }
 }
 
-async function listFiles(folders, args) {
+async function listFiles({ folders }, args) {
   const dir = resolvePath(folders, args.path)
   const out = []
   await walk(dir, Math.min(Math.max(Number(args.depth) || 3, 1), 8), out, dir)
   return out.length ? out.join('\n') : '(empty directory)'
 }
 
-async function readFile(folders, args) {
+async function readFile({ folders }, args) {
   const file = resolvePath(folders, args.path)
   const stat = await fsp.stat(file)
   if (stat.isDirectory()) throw new Error(`${args.path} is a directory; use list_files.`)
@@ -180,7 +284,7 @@ function globToRegex(glob) {
   return new RegExp('^' + esc + '$', 'i')
 }
 
-async function searchFiles(folders, args) {
+async function searchFiles({ folders }, args) {
   const dir = resolvePath(folders, args.path)
   const re = new RegExp(args.pattern, 'i')
   const nameRe = args.file_glob ? globToRegex(args.file_glob) : null
@@ -211,7 +315,7 @@ async function searchFiles(folders, args) {
   return hits.length ? hits.join('\n') : 'No matches.'
 }
 
-async function writeFile(folders, args) {
+async function writeFile({ folders }, args) {
   const file = resolvePath(folders, args.path)
   await fsp.mkdir(path.dirname(file), { recursive: true })
   const existed = fs.existsSync(file)
@@ -219,7 +323,7 @@ async function writeFile(folders, args) {
   return `${existed ? 'Updated' : 'Created'} ${args.path} (${Buffer.byteLength(String(args.content ?? ''))} bytes).`
 }
 
-async function editFile(folders, args) {
+async function editFile({ folders }, args) {
   const file = resolvePath(folders, args.path)
   const text = await fsp.readFile(file, 'utf8')
   const oldS = String(args.old_string ?? '')
@@ -231,17 +335,21 @@ async function editFile(folders, args) {
   return `Edited ${args.path}.`
 }
 
-function runCommand(folders, args, signal) {
+function runCommand({ folders, signal, env }, args) {
   return new Promise((resolve) => {
     const child = spawn(String(args.command), {
       cwd: folders[0],
       shell: true,
       windowsHide: true,
-      env: process.env,
+      env: { ...process.env, ...env },
     })
+    const timeoutMs = Math.min(Math.max(Number(args.timeout_seconds) || 120, 1), 900) * 1000
     let out = ''
     let err = ''
-    const timer = setTimeout(() => child.kill(), 120_000)
+    const timer = setTimeout(() => {
+      err += `\n[timed out after ${timeoutMs / 1000}s — for servers use start_process]`
+      child.kill()
+    }, timeoutMs)
     const onAbort = () => child.kill()
     signal?.addEventListener('abort', onAbort)
     child.stdout.on('data', (d) => (out = truncate(out + d, MAX_TOOL_OUTPUT * 2)))
@@ -259,6 +367,79 @@ function runCommand(folders, args, signal) {
   })
 }
 
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'])
+
+async function startProcess(ctx, args) {
+  if (!ctx.processes) throw new Error('Background processes are not available.')
+  const rec = ctx.processes.start({ command: String(args.command), cwd: ctx.folders[0], env: ctx.env, owner: ctx.owner })
+  const ms = Math.min(Math.max(Number(args.wait_seconds) || 8, 1), 60) * 1000
+  const why = await ctx.processes.waitFor(rec.id, { ms, pattern: args.ready_pattern || null })
+  const { text, status, exitCode } = ctx.processes.read(rec.id)
+  const head =
+    status === 'running'
+      ? `Started background process ${rec.id} (pid ${rec.pid}); still running${why === 'matched' ? ' — ready pattern matched' : ''}.`
+      : `Process ${rec.id} exited with code ${exitCode}.`
+  return truncate(`${head}\n--- output ---\n${text || '(no output yet)'}`)
+}
+
+async function readProcessOutput(ctx, args) {
+  if (!ctx.processes) throw new Error('Background processes are not available.')
+  const wait = Math.min(Math.max(Number(args.wait_seconds) || 0, 0), 60)
+  if (wait) await ctx.processes.waitFor(args.id, { ms: wait * 1000 })
+  const { text, status, exitCode } = ctx.processes.read(args.id, { all: !!args.all })
+  return truncate(`status: ${status}${status === 'exited' ? ` (code ${exitCode})` : ''}\n--- output ---\n${text || '(no new output)'}`)
+}
+
+async function stopProcess(ctx, args) {
+  if (!ctx.processes) throw new Error('Background processes are not available.')
+  return ctx.processes.stop(args.id) ? `Stopped ${args.id}.` : `${args.id} was not running.`
+}
+
+async function listProcesses(ctx) {
+  if (!ctx.processes) return 'No background processes.'
+  const list = ctx.processes.list().filter((p) => !ctx.owner || p.owner === ctx.owner)
+  if (!list.length) return 'No background processes.'
+  return list.map((p) => `${p.id}  ${p.status}${p.status === 'exited' ? `(${p.exitCode})` : ''}  ${p.command}`).join('\n')
+}
+
+async function httpRequest(ctx, args) {
+  const url = new URL(String(args.url))
+  if (!/^https?:$/.test(url.protocol) || !LOCAL_HOSTS.has(url.hostname)) {
+    throw new Error('http_request only works with local servers (localhost / 127.0.0.1).')
+  }
+  const started = Date.now()
+  const res = await fetch(url, {
+    method: String(args.method || 'GET').toUpperCase(),
+    headers: args.headers || undefined,
+    body: args.body ?? undefined,
+    signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(30_000)].filter(Boolean)),
+    redirect: 'manual',
+  })
+  const body = await res.text()
+  const headers = [...res.headers.entries()]
+    .filter(([k]) => ['content-type', 'location', 'set-cookie', 'content-length'].includes(k))
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\n')
+  return truncate(`HTTP ${res.status} ${res.statusText} (${Date.now() - started} ms)\n${headers}\n\n${body}`, 10_000)
+}
+
+async function browserCheck(ctx, args) {
+  if (!ctx.browserCheck) throw new Error('browser_check is not available.')
+  let target = String(args.url)
+  if (/^https?:/i.test(target)) {
+    const u = new URL(target)
+    if (!LOCAL_HOSTS.has(u.hostname)) throw new Error('browser_check only opens local pages (localhost or files in the working folder).')
+  } else {
+    target = 'file://' + resolvePath(ctx.folders, target.replace(/^file:\/\//, '')).split(path.sep).join('/')
+  }
+  return truncate(await ctx.browserCheck({ url: target, waitMs: Number(args.wait_ms) || 1500, script: args.script }), 12_000)
+}
+
+async function githubCreatePr(ctx, args) {
+  if (!ctx.github) throw new Error('This folder is not a GitHub repository, or no GitHub token is set.')
+  return ctx.github.createPullRequest(args)
+}
+
 const IMPLEMENTATIONS = {
   list_files: listFiles,
   read_file: readFile,
@@ -266,24 +447,45 @@ const IMPLEMENTATIONS = {
   write_file: writeFile,
   edit_file: editFile,
   run_command: runCommand,
+  start_process: startProcess,
+  read_process_output: readProcessOutput,
+  stop_process: stopProcess,
+  list_processes: listProcesses,
+  http_request: httpRequest,
+  browser_check: browserCheck,
+  github_create_pull_request: githubCreatePr,
 }
 
 function needsApproval(name, permissionMode) {
-  if (name === 'run_command') return permissionMode !== 'auto-all'
+  if (name === 'run_command' || name === 'start_process' || name === 'github_create_pull_request') return permissionMode !== 'auto-all'
   if (name === 'write_file' || name === 'edit_file') return permissionMode === 'ask'
   return false
 }
 
 // ---------- System prompt ----------
 
-async function buildSystemPrompt({ mode, folders, memory, toolsAvailable }) {
+async function buildSystemPrompt({ mode, folders, memory, toolsAvailable, github }) {
   const lines = []
   if (mode === 'code') {
     lines.push(
-      'You are Wicked Code, an expert software engineering agent running on the user\'s machine.',
-      'You work inside the user\'s project folder using tools: explore with list_files/search_files/read_file, change code with edit_file/write_file, and verify with run_command.',
-      'Always read a file before editing it. Prefer small, targeted edit_file changes over rewriting whole files. Keep the user informed with brief explanations, and finish with a short summary of what you changed.',
+      'You are Wicked Code, an autonomous software engineering agent running on the user\'s machine.',
+      'You work inside the user\'s project folder using tools: explore with list_files/search_files/read_file, change code with edit_file/write_file, and run things with run_command/start_process.',
+      '',
+      'Work in a build → run → test → fix loop until the task is really done:',
+      '1. Understand the code first (read the relevant files). Always read a file before editing it; prefer small edit_file changes.',
+      '2. After writing code, VERIFY it: run the tests, build, linter or the program itself with run_command. If there are no tests for new behaviour, write a quick test or script that exercises it.',
+      '3. For servers and apps that keep running, use start_process (with a ready_pattern), then exercise them with http_request or browser_check, and read logs with read_process_output.',
+      '4. When anything fails, read the error carefully, fix the cause, and run the check again. Repeat until everything passes. Do not stop at the first error and do not claim success without having run it.',
+      '5. Stop background processes you started once you are done with them.',
+      'Install missing dependencies when needed. Keep the user informed with brief updates, and finish with a short summary of what you changed and how you verified it (including the final test result).',
     )
+    if (github) {
+      lines.push(
+        '',
+        `This folder is the GitHub repository ${github.fullName} (current branch: ${github.branch || 'unknown'}). Git is authenticated for you.`,
+        'When the user asks you to ship or open a PR: make sure you are on a feature branch (not the default branch), `git add` + `git commit` with a clear message, `git push -u origin <branch>`, then call github_create_pull_request.',
+      )
+    }
   } else {
     lines.push(
       'You are Wicked Code, a helpful, knowledgeable assistant. Answer clearly and concisely, using Markdown when it helps.',
@@ -309,6 +511,45 @@ async function buildSystemPrompt({ mode, folders, memory, toolsAvailable }) {
   return lines.join('\n')
 }
 
+// ---------- Context management ----------
+
+const contentLength = (m) => (m.content?.length || 0) + (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0)
+
+/**
+ * Keep long agent loops inside the model's context window: once the conversation is over budget,
+ * shrink the oldest tool outputs and file contents first (the model can always re-read or re-run).
+ * The system prompt and the most recent messages are never touched.
+ */
+function compactMessages(messages, budget) {
+  let total = messages.reduce((a, m) => a + contentLength(m), 0)
+  if (total <= budget) return messages
+  const out = messages.map((m) => ({ ...m }))
+  const keepFrom = Math.max(1, out.length - 6)
+  for (let i = 1; i < keepFrom && total > budget; i++) {
+    const m = out[i]
+    if (m.role === 'tool' && m.content.length > 400) {
+      total -= m.content.length
+      m.content = m.content.slice(0, 300) + '\n… [older output trimmed to save context — re-run the tool if you need it again]'
+      total += m.content.length
+    } else if (m.role === 'assistant' && m.toolCalls?.some((c) => String(c.args?.content || '').length > 400)) {
+      m.toolCalls = m.toolCalls.map((c) => {
+        const content = String(c.args?.content || '')
+        if (content.length <= 400) return c
+        total -= content.length - 60
+        return { ...c, args: { ...c.args, content: `[${content.length} characters written earlier — trimmed]` } }
+      })
+    }
+  }
+  // Still too long: drop the oldest turns, but always keep the first user message for the original goal.
+  while (total > budget && out.length > 8) {
+    const [removed] = out.splice(2, 1)
+    total -= contentLength(removed)
+    // Never leave tool results without the assistant call that produced them.
+    while (out[2]?.role === 'tool') total -= contentLength(out.splice(2, 1)[0])
+  }
+  return out
+}
+
 // ---------- Agent loop ----------
 
 /**
@@ -330,13 +571,28 @@ async function buildSystemPrompt({ mode, folders, memory, toolsAvailable }) {
  */
 async function runAgent(p) {
   const produced = []
-  let tools = toolsFor(p.mode, p.folders)
-  let system = await buildSystemPrompt({ mode: p.mode, folders: p.folders, memory: p.memory, toolsAvailable: tools.length > 0 })
+  const caps = { processes: !!p.processes, browser: !!p.browserCheck, github: !!p.github }
+  let tools = toolsFor(p.mode, p.folders, caps)
+  const prompt = (toolsAvailable) =>
+    buildSystemPrompt({ mode: p.mode, folders: p.folders, memory: p.memory, toolsAvailable, github: p.github?.info })
+  let system = await prompt(tools.length > 0)
+  const ctx = {
+    folders: p.folders,
+    signal: p.signal,
+    env: p.env || {},
+    owner: p.owner,
+    processes: p.processes,
+    browserCheck: p.browserCheck,
+    github: p.github,
+  }
+  // Rough character budget for the conversation (≈3 chars per token, leaving room for the reply).
+  const budget = p.provider === 'ollama' ? Math.max(8000, (p.numCtx || 8192) * 3 - 6000) : 600_000
+  const maxSteps = p.maxSteps || DEFAULT_MAX_STEPS
 
-  for (let step = 0; step < MAX_STEPS; step++) {
+  for (let step = 0; step < maxSteps; step++) {
     if (p.signal.aborted) break
     p.emit('turn-start')
-    const messages = [{ role: 'system', content: system }, ...p.history, ...produced]
+    const messages = compactMessages([{ role: 'system', content: system }, ...p.history, ...produced], budget)
     let result
     try {
       result = await streamChat({
@@ -355,7 +611,7 @@ async function runAgent(p) {
       const msg = String(e.message || e)
       if (tools.length && /does not support tools/i.test(msg)) {
         tools = []
-        system = await buildSystemPrompt({ mode: p.mode, folders: p.folders, memory: p.memory, toolsAvailable: false })
+        system = await prompt(false)
         p.emit('notice', { text: `${p.model} does not support tool calling, so it can't read or edit files directly. Continuing without tools.` })
         step--
         continue
@@ -369,6 +625,9 @@ async function runAgent(p) {
     p.emit('assistant', { message: assistant })
     if (!result.toolCalls.length) break
 
+    if (step === maxSteps - 1) {
+      p.emit('notice', { text: `Stopped after ${maxSteps} steps. Send “continue” to keep going.` })
+    }
     for (const call of result.toolCalls) {
       if (p.signal.aborted) break
       let output
@@ -381,7 +640,7 @@ async function runAgent(p) {
           const ok = await p.requestApproval(call)
           if (!ok) throw new Error('The user denied this action. Ask them how they would like to proceed.')
         }
-        output = await impl(p.folders, call.args || {}, p.signal)
+        output = await impl(ctx, call.args || {})
       } catch (e) {
         isError = true
         output = 'Error: ' + String(e.message || e)
@@ -394,4 +653,4 @@ async function runAgent(p) {
   return produced
 }
 
-module.exports = { runAgent, resolvePath, buildSystemPrompt, toolsFor, IMPLEMENTATIONS, needsApproval }
+module.exports = { runAgent, resolvePath, buildSystemPrompt, toolsFor, IMPLEMENTATIONS, needsApproval, compactMessages, truncate }

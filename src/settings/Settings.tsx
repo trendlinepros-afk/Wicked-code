@@ -2,13 +2,15 @@ import { Icon } from '../components/ui'
 import { ApiKeys } from './ApiKeys'
 import { General } from './General'
 import { LocalModels } from './LocalModels'
+import { GitHubSettings } from './GitHubSettings'
 
-export type SettingsPage = 'general' | 'keys' | 'models'
+export type SettingsPage = 'general' | 'keys' | 'github' | 'models'
 
 export function SettingsView({ page, onPage, onClose }: { page: SettingsPage; onPage(p: SettingsPage): void; onClose(): void }) {
   const nav: { id: SettingsPage; label: string; icon: string }[] = [
     { id: 'general', label: 'General', icon: 'sliders' },
     { id: 'keys', label: 'API Keys', icon: 'key' },
+    { id: 'github', label: 'GitHub', icon: 'github' },
     { id: 'models', label: 'Local Model Management', icon: 'cpu' },
   ]
   return (
@@ -28,6 +30,7 @@ export function SettingsView({ page, onPage, onClose }: { page: SettingsPage; on
       <main className="settings-main">
         {page === 'general' && <General />}
         {page === 'keys' && <ApiKeys />}
+        {page === 'github' && <GitHubSettings />}
         {page === 'models' && <LocalModels />}
       </main>
     </div>

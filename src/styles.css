@@ -1568,3 +1568,160 @@ textarea.input {
 .update-later-note {
   margin-top: 10px;
 }
+
+/* ---------- GitHub, processes, agent ---------- */
+.segmented.wide {
+  display: flex;
+  margin-bottom: 14px;
+}
+.segmented.wide button {
+  flex: 1;
+  justify-content: center;
+}
+.newsession-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.newsession-body .btn-lg {
+  align-self: flex-start;
+}
+.repo-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.repo-item {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+}
+.repo-item:last-child {
+  border-bottom: 0;
+}
+.repo-item:hover {
+  background: var(--accent-soft);
+}
+.repo-item-name {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+.repo-item-desc {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.repo-picked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.repo-picked .btn {
+  margin-left: auto;
+}
+.repo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line-2);
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.repo-badge:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+.repo-branch {
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: rgba(182, 243, 92, 0.12);
+  color: var(--lime-text);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.auto-pill {
+  border: 0;
+  cursor: pointer;
+}
+.proc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 8px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.proc-chip button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+}
+.proc-chip button:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.proc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lime);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.ship-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.ship-chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.link-btn {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+}
+.steps {
+  margin: 6px 0 10px;
+  padding-left: 20px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.pane-head {
+  flex-wrap: wrap;
+}
+.approval-actions {
+  flex-wrap: wrap;
+}

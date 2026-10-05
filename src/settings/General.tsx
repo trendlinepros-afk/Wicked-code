@@ -5,7 +5,7 @@ import { Icon } from '../components/ui'
 import { UpdatesCard } from '../components/Updates'
 
 export function General() {
-  const { settings, setSettings, ollamaRunning, refreshModels } = useApp()
+  const { settings, setSettings, ollamaRunning, refreshModels, launcher } = useApp()
   const [url, setUrl] = useState(settings.ollamaUrl)
   const [vaultMsg, setVaultMsg] = useState<string | null>(null)
 
@@ -78,8 +78,27 @@ export function General() {
           </button>
         </div>
         <div className={`small ${ollamaRunning ? 'ok' : 'bad'}`}>
-          {ollamaRunning ? '● Connected' : '● Not reachable — install Ollama from ollama.com and make sure it is running'}
+          {ollamaRunning
+            ? `● Connected${launcher?.startedByApp ? ' (started by Wicked Code)' : ''}`
+            : launcher?.status === 'not-installed'
+              ? '● Ollama is not installed — get it from ollama.com/download'
+              : launcher?.status === 'starting'
+                ? '● Starting Ollama…'
+                : `● Not reachable${launcher?.error ? ` — ${launcher.error}` : ''}`}
         </div>
+        {!ollamaRunning && launcher?.status !== 'starting' && launcher?.status !== 'not-installed' && (
+          <button className="btn btn-sm" onClick={() => api().ollama.start()}>
+            <Icon name="play" size={12} /> Start Ollama
+          </button>
+        )}
+        <label className="check">
+          <input type="checkbox" checked={settings.autoStartOllama} onChange={(e) => set('autoStartOllama', e.target.checked)} />
+          Start Ollama automatically when Wicked Code opens
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={settings.stopOllamaOnExit} onChange={(e) => set('stopOllamaOnExit', e.target.checked)} />
+          Stop Ollama when Wicked Code closes (only if Wicked Code started it)
+        </label>
         <div className="field">
           <label>Auto-unload after idle (seconds)</label>
           <input
@@ -102,6 +121,24 @@ export function General() {
             ))}
           </select>
           <span className="muted small">Larger windows let the model see more code but use more VRAM.</span>
+        </div>
+      </section>
+
+      <section className="card">
+        <h3>Agent loop</h3>
+        <div className="field">
+          <label>Max steps per request</label>
+          <input
+            className="input narrow"
+            type="number"
+            min={10}
+            max={500}
+            value={settings.maxAgentSteps}
+            onChange={(e) => set('maxAgentSteps', Math.min(500, Math.max(10, Number(e.target.value) || 100)))}
+          />
+          <span className="muted small">
+            How many tool calls the agent may make for one message while it writes, runs, tests and fixes code. You can always say “continue”.
+          </span>
         </div>
       </section>
 
