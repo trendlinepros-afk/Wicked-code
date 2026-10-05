@@ -36,11 +36,13 @@ export function Workspace({
   visible,
   onManageModels,
   onOpenGithubSettings,
+  onOpenSettings,
 }: {
   mode: Mode
   visible: boolean
   onManageModels(): void
   onOpenGithubSettings(): void
+  onOpenSettings(): void
 }) {
   const { settings, modelState } = useApp()
   const [metas, setMetas] = useState<SessionMeta[]>([])
@@ -332,6 +334,9 @@ export function Workspace({
           ))}
         </div>
         <div className="sidebar-foot">
+          <button className="sidebar-settings" onClick={onOpenSettings} title="Settings">
+            <Icon name="gear" size={15} /> Settings
+          </button>
           <SidebarUpdateButton />
         </div>
       </aside>

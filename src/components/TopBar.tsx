@@ -6,11 +6,9 @@ import { Icon, Spinner } from './ui'
 export function TopBar({
   mode,
   onMode,
-  onSettings,
 }: {
   mode: Mode
   onMode(m: Mode): void
-  onSettings(): void
 }) {
   return (
     <header className="topbar">
@@ -31,9 +29,6 @@ export function TopBar({
       <div className="topbar-spacer" />
       <ModelControl />
       <VramMeter />
-      <button className="icon-btn" title="Settings" onClick={onSettings}>
-        <Icon name="gear" size={18} />
-      </button>
     </header>
   )
 }

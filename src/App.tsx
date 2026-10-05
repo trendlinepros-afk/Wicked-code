@@ -38,7 +38,6 @@ function Shell() {
           setMode(m)
           setSettingsPage(null)
         }}
-        onSettings={() => setSettingsPage((p) => (p ? null : 'general'))}
       />
       {!ollamaRunning && !settingsPage && (
         <div className="banner">
@@ -73,12 +72,14 @@ function Shell() {
           visible={!settingsPage && mode === 'chat'}
           onManageModels={() => setSettingsPage('models')}
           onOpenGithubSettings={() => setSettingsPage('github')}
+          onOpenSettings={() => setSettingsPage('general')}
         />
         <Workspace
           mode="code"
           visible={!settingsPage && mode === 'code'}
           onManageModels={() => setSettingsPage('models')}
           onOpenGithubSettings={() => setSettingsPage('github')}
+          onOpenSettings={() => setSettingsPage('general')}
         />
         {settingsPage && <SettingsView page={settingsPage} onPage={setSettingsPage} onClose={() => setSettingsPage(null)} />}
       </div>
