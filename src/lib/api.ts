@@ -68,6 +68,8 @@ export interface Message {
   review?: boolean
   /** Screenshot thumbnail (data URL) of a browser_check result */
   thumb?: string
+  /** "Lessons learned" summary posted from the top bar */
+  lessons?: { relPath: string; title: string; file: string }[]
 }
 
 export interface RepoInfo {
@@ -182,6 +184,16 @@ export interface PullProgress {
   error?: string | null
 }
 
+export interface Lesson {
+  title: string
+  problem: string
+  failed: string
+  worked: string
+  example: string
+  file: string
+  relPath: string
+}
+
 export interface NotesContext {
   id: string
   title: string
@@ -229,6 +241,10 @@ export interface WickedApi {
   }
   dialog: { pickFolder(title?: string): Promise<string | null> }
   shell: { openPath(p: string): Promise<string> }
+  lessons: {
+    /** Review a conversation with the model, save one vault note per lesson, return the chat message. */
+    learn(p: { modelId: string; messages: Message[]; sessionTitle: string; learner?: string }): Promise<{ lessons: Lesson[]; message: string }>
+  }
   notes: {
     open(): Promise<void>
     /** Tell the notes window which session is open in the main window */
@@ -364,6 +380,8 @@ export interface PermissionControl {
   value: PermissionMode
   set(mode: PermissionMode): void
   mode: Mode
+  /** "Lessons Learned" for the visible chat */
+  lessons: { canRun: boolean; busy: boolean; run(): void }
 }
 
 export const PERMISSION_OPTIONS: { value: PermissionMode; label: string; short: string; detail: string }[] = [

@@ -1051,3 +1051,72 @@ test('notes: app-wide note and one note per session, saved in the vault', () => 
   noVault.write('app', undefined, 'hi')
   assert.strictEqual(fs.readFileSync(path.join(vault, 'fb', 'App notes.md'), 'utf8'), 'hi')
 })
+
+// ---------- Lessons Learned ----------
+
+test('lessons: transcript keeps failed tool results; reply is parsed and saved one file per lesson', async () => {
+  const { buildTranscript, parseLessons, saveLessons, modelSlug, learnLessons } = require('./lessons.cjs')
+  const messages = [
+    { role: 'user', content: 'make the snake game work with arrow keys' },
+    { role: 'assistant', content: 'Testing.', toolCalls: [{ id: 'a', name: 'browser_check', args: { url: 'index.html' } }] },
+    { role: 'tool', toolCallId: 'a', toolName: 'browser_check', isError: true, content: 'Uncaught TypeError: ctx is null' },
+    { role: 'assistant', content: 'Fixed by waiting for DOMContentLoaded.' },
+  ]
+  const t = buildTranscript(messages)
+  assert.match(t, /TOOL RESULT browser_check \(FAILED\): Uncaught TypeError/)
+  assert.match(t, /USER: make the snake game/)
+
+  const reply = `<think>hmm</think>
+LESSON: **Wait for the DOM before drawing on the canvas please**
+PROBLEM: The game crashed on load.
+WHAT FAILED: Getting the canvas context at the top of the script returned null.
+WHAT WORKED: Wrapped the start code in a DOMContentLoaded listener.
+EXAMPLE:
+document.addEventListener('DOMContentLoaded', start)
+===
+LESSON: Arrow keys need preventDefault
+PROBLEM: Arrow keys scrolled the page.
+WHAT FAILED: Listening on the canvas only.
+WHAT WORKED: keydown on window with e.preventDefault().
+EXAMPLE:
+none
+===`
+  const lessons = parseLessons(reply)
+  assert.strictEqual(lessons.length, 2)
+  assert.strictEqual(lessons[0].title, 'Wait for the DOM') // max five words, no dangling "before"
+  assert.strictEqual(require('./lessons.cjs').cleanTitle('Test key input with a script'), 'Test key input')
+  assert.strictEqual(lessons[0].example, "document.addEventListener('DOMContentLoaded', start)")
+  assert.strictEqual(lessons[1].example, '')
+  assert.strictEqual(lessons[1].worked, 'keydown on window with e.preventDefault().')
+
+  assert.strictEqual(modelSlug('qwen3.8:27b'), 'qwen3.8-27b')
+  const vault = tmpDir()
+  const saved = saveLessons({ vaultPath: vault, model: 'qwen3.8:27b', lessons, sessionTitle: 'Snake game' })
+  const dir = path.join(vault, 'Lessons Learned', 'qwen3.8-27b')
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['qwen3.8-27b-Arrow keys need preventDefault.md', 'qwen3.8-27b-Wait for the DOM.md'])
+  const md = fs.readFileSync(saved[0].file, 'utf8')
+  assert.match(md, /^---\nmodel: "qwen3.8:27b"/)
+  assert.match(md, /## What worked\nWrapped the start code/)
+  assert.match(md, /```\ndocument.addEventListener/)
+  assert.strictEqual(saved[0].relPath, 'Lessons Learned/qwen3.8-27b/qwen3.8-27b-Wait for the DOM.md')
+  // Same lesson again never overwrites.
+  saveLessons({ vaultPath: vault, model: 'qwen3.8:27b', lessons: [lessons[1]], sessionTitle: 'x' })
+  assert.ok(fs.existsSync(path.join(dir, 'qwen3.8-27b-Arrow keys need preventDefault (2).md')))
+
+  // End to end with a model.
+  const { server, requests, ollama } = await scriptedOllama([{ content: reply }, { content: 'NONE' }, { content: 'Sure! Here are some thoughts.' }])
+  try {
+    const vault2 = tmpDir()
+    const r = await learnLessons({ provider: 'ollama', model: 'qwen3.8:27b', learner: 'qwen2.5-coder:7b', ollama, messages, vaultPath: vault2, sessionTitle: 'Snake' })
+    assert.strictEqual(r.lessons.length, 2)
+    assert.ok(fs.existsSync(path.join(vault2, 'Lessons Learned', 'qwen2.5-coder-7b', 'qwen2.5-coder-7b-Arrow keys need preventDefault.md')))
+    assert.match(r.message, /Lessons learned \(2\)[\s\S]*What worked:\*\* Wrapped[\s\S]*Saved to\* `Lessons Learned\/qwen2.5-coder-7b\//)
+    assert.match(requests[0].messages[1].content, /Uncaught TypeError/)
+    const none = await learnLessons({ provider: 'ollama', model: 'qwen3.8:27b', ollama, messages, vaultPath: vault2 })
+    assert.strictEqual(none.lessons.length, 0)
+    assert.match(none.message, /no new lessons/)
+    await assert.rejects(learnLessons({ provider: 'ollama', model: 'qwen3.8:27b', ollama, messages, vaultPath: vault2 }), /couldn't be read/)
+  } finally {
+    server.close()
+  }
+})

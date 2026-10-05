@@ -2830,3 +2830,68 @@ kbd {
 .notes-foot.error {
   color: var(--danger, #e5484d);
 }
+
+/* ---------- Lessons Learned ---------- */
+.lessons-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.lessons-btn svg {
+  color: var(--accent);
+}
+.lessons-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.lessons-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.lessons-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 10px 14px;
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.msg.assistant.lessons {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 16px;
+  background: var(--bg-2);
+}
+.lesson-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.lesson-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: var(--bg-3);
+  color: var(--text);
+  font-size: 12px;
+}
+.lesson-file:hover {
+  border-color: var(--accent);
+}

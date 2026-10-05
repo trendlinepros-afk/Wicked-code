@@ -181,12 +181,21 @@ export function MessageList({
           )
         }
         return (
-          <div key={i} className={`msg assistant ${m.isError ? 'error' : ''}`}>
+          <div key={i} className={`msg assistant ${m.isError ? 'error' : ''} ${m.lessons ? 'lessons' : ''}`}>
             {m.thinking && <Thinking text={m.thinking} />}
             {m.content && (m.isError ? <div className="callout error">{m.content}</div> : <Markdown text={m.content} />)}
             {m.toolCalls?.map((c) => (
               <ToolRow key={c.id} call={c} result={results.get(c.id)} pending={running} />
             ))}
+            {!!m.lessons?.length && (
+              <div className="lesson-files">
+                {m.lessons.map((l) => (
+                  <button key={l.file} className="lesson-file" onClick={() => api().shell.openPath(l.file)} title={`Open ${l.relPath}`}>
+                    <Icon name="book" size={13} /> {l.title}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )
       })}

@@ -32,6 +32,7 @@ export function TopBar({
         </button>
       </nav>
       <div className="topbar-spacer" />
+      <LessonsButton ctl={permission?.lessons ?? null} mode={permission?.mode ?? mode} />
       <PermissionMenu ctl={permission} />
       <ModelControl />
       <VramMeter />
@@ -168,6 +169,28 @@ function VramMeter() {
 }
 
 /** Per-chat permissions: how much the agent may do without asking, for the chat you're looking at. */
+/** "Lessons Learned": the model reviews the visible chat and saves what it learned to the vault. */
+function LessonsButton({ ctl, mode }: { ctl: PermissionControl['lessons'] | null; mode: Mode }) {
+  const what = mode === 'code' ? 'code session' : 'chat'
+  return (
+    <button
+      className="lessons-btn"
+      disabled={!ctl || !ctl.canRun}
+      onClick={() => ctl?.run()}
+      title={
+        ctl?.busy
+          ? 'Reviewing this conversation…'
+          : ctl?.canRun
+            ? `Post what the model learned in this ${what} (what failed and what finally worked) and save each lesson to your vault under Lessons Learned`
+            : `Available once this ${what} has messages and no reply is running`
+      }
+    >
+      {ctl?.busy ? <Spinner /> : <Icon name="sparkle" size={15} />}
+      Lessons Learned
+    </button>
+  )
+}
+
 function PermissionMenu({ ctl }: { ctl: PermissionControl | null }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)

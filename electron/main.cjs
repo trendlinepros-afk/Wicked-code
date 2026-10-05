@@ -19,6 +19,7 @@ const { GitHub, repoInfo, slugify } = require('./github.cjs')
 const { OllamaLauncher } = require('./ollamaLauncher.cjs')
 const { PreviewRoots, SCHEME: PREVIEW_SCHEME } = require('./preview.cjs')
 const { NotesStore } = require('./notes.cjs')
+const { learnLessons } = require('./lessons.cjs')
 const os = require('os')
 const { initLog, log, logFile } = require('./log.cjs')
 
@@ -500,6 +501,41 @@ function registerIpc() {
       })
       log('title', 'generated', { ms: Date.now() - started, title })
       return title
+    } finally {
+      titleRuns.delete(ac)
+      models.endBusy()
+    }
+  })
+
+  // ----- Lessons Learned (top bar) -----
+  handle('lessons:learn', async ({ modelId, messages, sessionTitle, learner }) => {
+    const { provider, model } = parseModelId(modelId)
+    models.beginBusy()
+    const started = Date.now()
+    const ac = new AbortController()
+    titleRuns.add(ac) // Ctrl+U stops it like any other model work
+    try {
+      const ctxLen = Number(config.get('contextLength')) || 8192
+      const result = await learnLessons({
+        provider,
+        model,
+        apiKey: provider === 'ollama' ? null : config.getApiKey(provider),
+        ollama,
+        ollamaOptions: provider === 'ollama' ? await ollamaRunOptions(model) : undefined,
+        keepAlive: models.keepAlive(),
+        messages,
+        sessionTitle,
+        learner: learner || model,
+        vaultPath: config.get('vaultPath'),
+        maxChars: provider === 'ollama' ? Math.max(8000, ctxLen * 3 - 5000) : 120_000,
+        signal: AbortSignal.any([ac.signal, AbortSignal.timeout(600_000)]),
+      })
+      log('lessons', 'saved', { ms: Date.now() - started, count: result.lessons.length, files: result.lessons.map((l) => l.relPath) })
+      return result
+    } catch (e) {
+      log('lessons', 'failed', { ms: Date.now() - started, message: String(e.message || e) })
+      if (ac.signal.aborted) throw new Error('Stopped.')
+      throw e
     } finally {
       titleRuns.delete(ac)
       models.endBusy()

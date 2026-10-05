@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('wicked', {
   apiKeys: { set: invoke('apiKeys:set'), test: invoke('apiKeys:test') },
   dialog: { pickFolder: invoke('dialog:pickFolder') },
   shell: { openPath: invoke('shell:openPath') },
+  lessons: { learn: invoke('lessons:learn') },
   notes: {
     open: invoke('notes:open'),
     setContext: invoke('notes:setContext'),

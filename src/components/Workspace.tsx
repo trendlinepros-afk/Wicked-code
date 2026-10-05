@@ -85,6 +85,8 @@ export function Workspace({
     }
   })
   const [resizing, setResizing] = useState(false)
+  // Session id whose "Lessons Learned" review is running.
+  const [learning, setLearning] = useState<string | null>(null)
 
   const updateRun = (fn: (r: RunState) => RunState) => {
     if (!runRef.current) return
@@ -476,11 +478,50 @@ export function Workspace({
   const changePermissionRef = useRef(changePermission)
   changePermissionRef.current = changePermission
 
+  /** Top bar "Lessons Learned": the model reviews this conversation; one vault note per lesson. */
+  const learnLessons = async () => {
+    const s = activeRef.current
+    const modelId = settings.selectedModel
+    if (!s || !s.messages.length || runRef.current || learning) return
+    if (!modelId) return setError('Select a model first (bottom right).')
+    setLearning(s.id)
+    setError(null)
+    stickToBottom.current = true
+    try {
+      const learner = [...s.messages].reverse().find((m) => m.role === 'assistant' && m.model)?.model ?? parseModelId(s.model || modelId).model
+      const res = await api().lessons.learn({ modelId, messages: forModel(s.messages), sessionTitle: s.title, learner })
+      const msg: Message = {
+        role: 'assistant',
+        content: res.message,
+        model: parseModelId(modelId).model,
+        lessons: res.lessons.map((l) => ({ title: l.title, relPath: l.relPath, file: l.file })),
+      }
+      // Append to the latest copy of the session (a reply may have finished meanwhile).
+      const cur = activeRef.current?.id === s.id ? activeRef.current : await api().sessions.load(s.id)
+      const next: Session = { ...cur, messages: [...cur.messages, msg], updatedAt: new Date().toISOString() }
+      setActive((c) => (c?.id === s.id ? next : c))
+      const saved = await persist(next)
+      setActive((c) => (c?.id === saved.id ? { ...c, notePath: saved.notePath } : c))
+    } catch (e) {
+      setError('Lessons Learned: ' + String((e as Error).message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))
+    } finally {
+      setLearning(null)
+    }
+  }
+  const learnRef = useRef(learnLessons)
+  learnRef.current = learnLessons
+  const canLearn = !!active?.messages.length && !run && !learning
+
   // Hand the top bar a control for the visible chat's permissions.
   useEffect(() => {
     if (!visible) return
-    onPermissionControl({ value: permission, mode, set: (m) => changePermissionRef.current(m) })
-  }, [visible, permission, mode, onPermissionControl])
+    onPermissionControl({
+      value: permission,
+      mode,
+      set: (m) => changePermissionRef.current(m),
+      lessons: { canRun: canLearn, busy: !!learning && learning === active?.id, run: () => learnRef.current() },
+    })
+  }, [visible, permission, mode, onPermissionControl, canLearn, learning, active?.id])
   useEffect(() => () => onPermissionControl(null), [onPermissionControl])
 
   // The Notes window follows whichever chat / code session is on screen.
@@ -710,6 +751,11 @@ export function Workspace({
               </div>
             )}
             <MessageList messages={messages} running={runningHere} live={runningHere ? { text: run!.liveText, thinking: run!.liveThinking } : null} />
+            {learning && learning === active?.id && (
+              <div className="lessons-working">
+                <Spinner /> Reviewing this conversation for lessons learned…
+              </div>
+            )}
             {runningHere &&
               run!.notices.map((n, i) => (
                 <div key={i} className="callout warn">
