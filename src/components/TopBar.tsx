@@ -1,0 +1,128 @@
+import { api, parseModelId, PROVIDER_LABELS, type Mode } from '../lib/api'
+import { useApp } from '../lib/store'
+import { Icon, Spinner } from './ui'
+
+export function TopBar({
+  mode,
+  onMode,
+  onSettings,
+}: {
+  mode: Mode
+  onMode(m: Mode): void
+  onSettings(): void
+}) {
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <span className="brand-mark">W</span>
+        <span className="brand-name">
+          wicked <b>code</b>
+        </span>
+      </div>
+      <nav className="mode-tabs" role="tablist">
+        <button role="tab" aria-selected={mode === 'chat'} className={mode === 'chat' ? 'active' : ''} onClick={() => onMode('chat')}>
+          <Icon name="chat" /> Chat
+        </button>
+        <button role="tab" aria-selected={mode === 'code'} className={mode === 'code' ? 'active' : ''} onClick={() => onMode('code')}>
+          <Icon name="code" /> Code
+        </button>
+      </nav>
+      <div className="topbar-spacer" />
+      <ModelControl />
+      <VramMeter />
+      <button className="icon-btn" title="Settings" onClick={onSettings}>
+        <Icon name="gear" size={18} />
+      </button>
+    </header>
+  )
+}
+
+function ModelControl() {
+  const { modelState, ollamaRunning } = useApp()
+  if (!modelState) return null
+  const { provider, model } = parseModelId(modelState.model)
+  const status = modelState.status
+  const busy = status === 'loading' || status === 'unloading'
+
+  let label = 'Load model'
+  if (status === 'loaded') label = 'Unload model'
+  if (status === 'loading') label = 'Loading…'
+  if (status === 'unloading') label = 'Unloading…'
+
+  const statusText =
+    status === 'cloud'
+      ? PROVIDER_LABELS[provider]
+      : status === 'loaded'
+        ? modelState.busy
+          ? 'In use'
+          : modelState.idleRemaining != null
+            ? `Loaded · auto-unload in ${modelState.idleRemaining}s`
+            : 'Loaded'
+        : status === 'error'
+          ? 'Error'
+          : status === 'unloaded'
+            ? 'Not loaded'
+            : label
+
+  return (
+    <div className={`model-control status-${status}`} title={modelState.error || ''}>
+      <span className="status-dot" />
+      <div className="model-control-text">
+        <span className="model-control-name">{model || 'No model selected'}</span>
+        <span className="model-control-status">{!modelState.local || ollamaRunning ? statusText : 'Ollama not running'}</span>
+      </div>
+      {modelState.local ? (
+        <button
+          className={status === 'loaded' ? 'btn btn-sm' : 'btn btn-sm btn-primary'}
+          disabled={busy || !modelState.model || !ollamaRunning || modelState.busy}
+          onClick={() => (status === 'loaded' ? api().model.unload() : api().model.load())}
+        >
+          {busy ? <Spinner /> : <Icon name="power" size={14} />}
+          {label}
+        </button>
+      ) : (
+        <button className="btn btn-sm" disabled title="Cloud models don't use local memory">
+          <Icon name="power" size={14} /> Cloud model
+        </button>
+      )}
+    </div>
+  )
+}
+
+function VramMeter() {
+  const { gpu } = useApp()
+  if (!gpu) return null
+  if (gpu.totalMB <= 0) {
+    return (
+      <div className="vram" title="No supported GPU detected (NVIDIA via nvidia-smi, AMD via rocm-smi, or Apple Silicon)">
+        <div className="vram-label">
+          <span>VRAM</span>
+          <span>n/a</span>
+        </div>
+        <div className="vram-bar" />
+      </div>
+    )
+  }
+  const used = gpu.usedMB / 1024
+  const total = gpu.totalMB / 1024
+  const pct = Math.min(100, (gpu.usedMB / gpu.totalMB) * 100)
+  const level = pct > 90 ? 'high' : pct > 70 ? 'mid' : 'low'
+  const tip = [
+    ...gpu.gpus.map((g) => `${g.name}: ${(g.usedMB / 1024).toFixed(1)} / ${(g.totalMB / 1024).toFixed(1)} GB`),
+    `Ollama models: ${(gpu.ollamaVramMB / 1024).toFixed(1)} GB`,
+    `Available: ${(total - used).toFixed(1)} GB`,
+  ].join('\n')
+  return (
+    <div className="vram" title={tip}>
+      <div className="vram-label">
+        <span>VRAM</span>
+        <span>
+          <b>{used.toFixed(1)}</b> / {total.toFixed(1)} GB · {(total - used).toFixed(1)} free
+        </span>
+      </div>
+      <div className="vram-bar">
+        <div className={`vram-fill ${level}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  )
+}
