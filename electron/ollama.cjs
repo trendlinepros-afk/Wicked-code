@@ -73,7 +73,7 @@ class Ollama {
   async ps() {
     const res = await this.request('/api/ps', { signal: AbortSignal.timeout(2000) })
     const j = await res.json()
-    return (j.models || []).map((m) => ({ name: m.name, size: m.size, sizeVram: m.size_vram || 0 }))
+    return (j.models || []).map((m) => ({ name: m.name, size: m.size, sizeVram: m.size_vram || 0, expiresAt: m.expires_at || null }))
   }
 
   /** Load a model into memory (empty generate request). */

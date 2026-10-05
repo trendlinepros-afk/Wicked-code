@@ -7,7 +7,7 @@ const { Ollama } = require('./ollama.cjs')
 const { ModelManager, parseModelId } = require('./modelManager.cjs')
 const { getGpuStats } = require('./gpu.cjs')
 const { listCloudModels, testApiKey } = require('./providers.cjs')
-const { runAgent } = require('./agent.cjs')
+const { runAgent, needsApproval } = require('./agent.cjs')
 const { Vault, setupVault, inspectVault } = require('./vault.cjs')
 const { Updater } = require('./updater.cjs')
 const { generateTitle } = require('./titles.cjs')
@@ -34,7 +34,8 @@ let quitting = false
 const runs = new Map() // runId -> AbortController
 const titleRuns = new Set() // AbortControllers for chat-naming requests
 const approvals = new Map() // requestId -> resolve
-const runAllowAll = new Set() // runIds where the user chose "allow all for this session"
+const runPermissions = new Map() // runId -> permission mode of that chat ('ask' | 'auto-edits' | 'auto-all'); can change mid-run
+const approvalCalls = new Map() // requestId -> { runId, name } of the tool call waiting for approval
 const pulls = new Map() // model name -> AbortController
 
 function send(channel, payload) {
@@ -55,6 +56,7 @@ async function forceUnload() {
   for (const [id, resolve] of approvals) {
     resolve(false)
     approvals.delete(id)
+    approvalCalls.delete(id)
   }
   let loaded = []
   try {
@@ -497,7 +499,7 @@ function registerIpc() {
   })
 
   // ----- agent -----
-  handle('agent:run', async ({ runId, mode, modelId, history, folders, sessionId, autoApprove }) => {
+  handle('agent:run', async ({ runId, mode, modelId, history, folders, sessionId, autoApprove, permissionMode }) => {
     const { provider, model } = parseModelId(modelId)
     const ac = new AbortController()
     runs.set(runId, ac)
@@ -531,7 +533,8 @@ function registerIpc() {
     log('run', 'start', { mode, model: modelId, ctx: config.get('contextLength'), status: models.status, history: history.length })
     try {
       const memory = config.get('useVaultMemory') ? await vault.readMemory() : null
-      if (autoApprove) runAllowAll.add(runId)
+      // Per-chat permission (falls back to the default in Settings for older sessions).
+      runPermissions.set(runId, autoApprove ? 'auto-all' : permissionMode || config.get('permissionMode') || 'ask')
       const ghToken = config.getApiKey('github')
       const info = mode === 'code' && folders?.[0] ? await repoInfo(folders[0]) : null
       const ghTools = info && ghToken ? { info, createPullRequest: (args) => github.createPullRequest(folders[0], args) } : null
@@ -563,14 +566,14 @@ function registerIpc() {
         numCtx: Number(config.get('contextLength')) || 0,
         keepAlive: models.keepAlive(),
         ollamaOptions: ollamaRunOptions(),
-        permissionMode: config.get('permissionMode'),
+        permissionMode: () => runPermissions.get(runId) || 'ask',
         signal: ac.signal,
         emit,
         requestApproval: (call) =>
           new Promise((resolve) => {
-            if (runAllowAll.has(runId)) return resolve(true)
             const requestId = `${runId}:${call.id}`
             approvals.set(requestId, resolve)
+            approvalCalls.set(requestId, { runId, name: call.name })
             ac.signal.addEventListener('abort', () => resolve(false), { once: true })
             emit('approval', { requestId, call })
           }),
@@ -591,26 +594,31 @@ function registerIpc() {
       throw e
     } finally {
       runs.delete(runId)
-      runAllowAll.delete(runId)
+      runPermissions.delete(runId)
       models.endBusy()
     }
   })
   handle('agent:stop', (runId) => runs.get(runId)?.abort())
-  handle('agent:approve', (requestId, allowed) => {
-    // allowed: true | false | 'all' (approve this and everything else for the rest of the run)
-    if (allowed === 'all') {
-      const runId = requestId.slice(0, requestId.indexOf(':'))
-      runAllowAll.add(runId)
-      // Release any other approvals already waiting in this run.
-      for (const [id, resolve] of approvals) {
-        if (id.startsWith(runId + ':')) {
-          resolve(true)
-          approvals.delete(id)
-        }
+  /** Change a running chat's permission level; approvals it no longer needs are released. */
+  const setRunPermission = (runId, mode) => {
+    if (!runs.has(runId)) return
+    runPermissions.set(runId, mode)
+    for (const [id, info] of approvalCalls) {
+      if (info.runId === runId && !needsApproval(info.name, mode)) {
+        approvals.get(id)?.(true)
+        approvals.delete(id)
+        approvalCalls.delete(id)
       }
     }
+  }
+  handle('agent:setPermission', (runId, mode) => setRunPermission(runId, mode))
+  handle('agent:approve', (requestId, allowed) => {
+    // allowed: true | false | 'all' (approve this and switch the chat to auto-approve everything)
+    const runId = requestId.slice(0, requestId.indexOf(':'))
     approvals.get(requestId)?.(!!allowed)
     approvals.delete(requestId)
+    approvalCalls.delete(requestId)
+    if (allowed === 'all') setRunPermission(runId, 'auto-all')
   })
 }
 

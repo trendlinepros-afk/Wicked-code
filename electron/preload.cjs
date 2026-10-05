@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld('wicked', {
     run: invoke('agent:run'),
     stop: invoke('agent:stop'),
     approve: invoke('agent:approve'),
+    setPermission: invoke('agent:setPermission'),
     onEvent: subscribe('agent:event'),
   },
 })

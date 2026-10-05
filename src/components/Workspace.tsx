@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
-import { api, parseModelId, uid, type Attachment, type Message, type Mode, type ProcessInfo, type Session, type SessionMeta, type ToolCall } from '../lib/api'
+import { api, parseModelId, uid, type Attachment, type Message, type PermissionControl, type PermissionMode, type Mode, type ProcessInfo, type Session, type SessionMeta, type ToolCall } from '../lib/api'
 import { useApp } from '../lib/store'
 import { MessageList, ToolArgs, EmptyIcon, AttachmentChip } from './Messages'
 import { ModelPicker } from './ModelPicker'
@@ -39,12 +39,15 @@ export function Workspace({
   onManageModels,
   onOpenGithubSettings,
   onOpenSettings,
+  onPermissionControl,
 }: {
   mode: Mode
   visible: boolean
   onManageModels(): void
   onOpenGithubSettings(): void
   onOpenSettings(): void
+  /** Registers this workspace's per-chat permission control with the top bar while visible. */
+  onPermissionControl(c: PermissionControl | null): void
 }) {
   const { settings, modelState } = useApp()
   const [metas, setMetas] = useState<SessionMeta[]>([])
@@ -60,6 +63,9 @@ export function Workspace({
   const [showNewCode, setShowNewCode] = useState(false)
   const [naming, setNaming] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
+  // Permission for a chat that hasn't been created yet (before its first message).
+  const [draftPermission, setDraftPermission] = useState<PermissionMode | null>(null)
+  const activeRef = useRef<Session | null>(null)
   const [procs, setProcs] = useState<ProcessInfo[]>([])
   const runRef = useRef<RunState | null>(null)
   const lastTouch = useRef(0)
@@ -155,6 +161,7 @@ export function Workspace({
     if (active?.id === id) return
     try {
       const s = await api().sessions.load(id)
+      setDraftPermission(null)
       setActive(s)
       setError(null)
       refreshRepo(s)
@@ -174,6 +181,7 @@ export function Workspace({
     }
     setError(null)
     setInput('')
+    setDraftPermission(null)
     inputRef.current?.focus()
   }
 
@@ -280,6 +288,7 @@ export function Workspace({
     if (mode === 'code' && !active?.folders.length) return setError('Choose a working folder before starting a code session.')
 
     let session = active ?? newSession(mode, modelId, [])
+    if (!session.permissionMode) session = { ...session, permissionMode: permissionOf(session) }
     const userMsg: Message = { role: 'user', content: text }
     if (files.length) userMsg.attachments = files.map(({ reading: _r, ...f }) => f)
     const isFirst = session.messages.length === 0
@@ -314,7 +323,7 @@ export function Workspace({
         history: forModel(session.messages),
         folders: session.folders,
         sessionId: session.id,
-        autoApprove: session.autoApprove,
+        permissionMode: permissionOf(session),
       })
     } catch (e) {
       failure = String((e as Error).message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
@@ -337,9 +346,15 @@ export function Workspace({
     runRef.current = null
     setRun(null)
 
-    // The session may have been switched to auto-approve during the run.
-    const autoApprove = session.autoApprove || runAutoApprove.current === session.id
-    let finished: Session = { ...session, autoApprove, messages: [...session.messages, ...produced], updatedAt: new Date().toISOString() }
+    // The chat's permission may have been changed while the reply was running.
+    const latest = activeRef.current?.id === session.id ? activeRef.current : null
+    let finished: Session = {
+      ...session,
+      permissionMode: latest?.permissionMode ?? session.permissionMode,
+      autoApprove: false,
+      messages: [...session.messages, ...produced],
+      updatedAt: new Date().toISOString(),
+    }
     finished = await refreshRepo(finished)
     setActive((cur) => (cur?.id === finished.id ? finished : cur))
     const saved = await persist(finished)
@@ -390,13 +405,11 @@ export function Workspace({
 
   const stop = () => run && api().agent.stop(run.runId)
 
-  const runAutoApprove = useRef<string | null>(null)
   const answerApproval = (requestId: string, allowed: boolean | 'all') => {
     api().agent.approve(requestId, allowed)
     if (allowed === 'all') {
-      runAutoApprove.current = runRef.current?.sessionId ?? null
       updateRun((r) => ({ ...r, approvals: [] }))
-      setActive((cur) => (cur ? { ...cur, autoApprove: true } : cur))
+      setActive((cur) => (cur ? { ...cur, permissionMode: 'auto-all', autoApprove: false } : cur))
     } else {
       updateRun((r) => ({ ...r, approvals: r.approvals.filter((a) => a.requestId !== requestId) }))
     }
@@ -408,6 +421,40 @@ export function Workspace({
     if (active?.id === m.id) setActive(null)
     refreshList()
   }
+
+  activeRef.current = active
+  /** This chat's permission level (older sessions: "auto-approve" = everything). */
+  const permissionOf = (s: Session | null): PermissionMode =>
+    s?.permissionMode ?? (s?.autoApprove ? 'auto-all' : draftPermission ?? settings.permissionMode ?? 'ask')
+  const permission = permissionOf(active)
+
+  const changePermission = async (mode: PermissionMode) => {
+    const cur = activeRef.current
+    if (!cur) return setDraftPermission(mode)
+    const next = { ...cur, permissionMode: mode, autoApprove: false }
+    setActive(next)
+    // Takes effect immediately for a reply that's running in this chat.
+    if (runRef.current?.sessionId === cur.id) {
+      api().agent.setPermission(runRef.current.runId, mode)
+      if (mode !== 'ask') updateRun((r) => ({ ...r, approvals: r.approvals.filter((a) => (mode === 'auto-edits' ? !['write_file', 'edit_file'].includes(a.call.name) : false)) }))
+    }
+    if (next.messages.length) {
+      try {
+        await api().sessions.save(next)
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  const changePermissionRef = useRef(changePermission)
+  changePermissionRef.current = changePermission
+
+  // Hand the top bar a control for the visible chat's permissions.
+  useEffect(() => {
+    if (!visible) return
+    onPermissionControl({ value: permission, mode, set: (m) => changePermissionRef.current(m) })
+  }, [visible, permission, mode, onPermissionControl])
+  useEffect(() => () => onPermissionControl(null), [onPermissionControl])
 
   const runningHere = !!run && run.sessionId === active?.id
   const sessionProcs = procs.filter((p) => p.status === 'running' && p.owner === active?.id)
@@ -527,19 +574,6 @@ export function Workspace({
                 <Icon name="github" size={13} /> {active.github.fullName}
                 {active.github.branch && <span className="repo-branch">{active.github.branch}</span>}
               </a>
-            )}
-            {active.autoApprove && (
-              <button
-                className="pill accent auto-pill"
-                title="Actions run without asking in this session. Click to ask again."
-                onClick={async () => {
-                  const next = { ...active, autoApprove: false }
-                  setActive(next)
-                  if (next.messages.length) await persist(next)
-                }}
-              >
-                auto-approve ✕
-              </button>
             )}
             <span className="topbar-spacer" />
             {sessionProcs.map((p) => (

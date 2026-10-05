@@ -1,4 +1,5 @@
-import { api, parseModelId, PROVIDER_LABELS, type Mode } from '../lib/api'
+import { api, parseModelId, PERMISSION_OPTIONS, PROVIDER_LABELS, type Mode, type PermissionControl } from '../lib/api'
+import { useEffect, useRef, useState } from 'react'
 import { useApp } from '../lib/store'
 import { catalogInfo, vramNeededGB } from '../lib/catalog'
 import { capacity } from '../lib/rating'
@@ -7,9 +8,12 @@ import { Icon, Spinner } from './ui'
 export function TopBar({
   mode,
   onMode,
+  permission,
 }: {
   mode: Mode
   onMode(m: Mode): void
+  /** The visible chat's permission control (null while Settings is open). */
+  permission: PermissionControl | null
 }) {
   return (
     <header className="topbar">
@@ -28,6 +32,7 @@ export function TopBar({
         </button>
       </nav>
       <div className="topbar-spacer" />
+      <PermissionMenu ctl={permission} />
       <ModelControl />
       <VramMeter />
     </header>
@@ -101,9 +106,16 @@ function ModelControl() {
       {modelState.local ? (
         <button
           className={status === 'loaded' ? 'btn btn-sm' : 'btn btn-sm btn-primary'}
-          disabled={busy || !modelState.model || !ollamaRunning || modelState.busy}
+          disabled={busy || !modelState.model || !ollamaRunning}
           title={status === 'loaded' ? 'Unload model (Ctrl+U force-unloads anytime, even mid-reply)' : 'Load model'}
-          onClick={() => (status === 'loaded' ? api().model.unload() : api().model.load())}
+          onClick={() =>
+            status === 'loaded'
+              ? // While a reply or chat-naming is running, unloading stops it first (same as Ctrl+U).
+                modelState.busy
+                ? api().model.forceUnload()
+                : api().model.unload()
+              : api().model.load()
+          }
         >
           {busy ? <Spinner /> : <Icon name="power" size={14} />}
           {label}
@@ -151,6 +163,66 @@ function VramMeter() {
       <div className="vram-bar">
         <div className={`vram-fill ${level}`} style={{ width: `${pct}%` }} />
       </div>
+    </div>
+  )
+}
+
+/** Per-chat permissions: how much the agent may do without asking, for the chat you're looking at. */
+function PermissionMenu({ ctl }: { ctl: PermissionControl | null }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  const current = PERMISSION_OPTIONS.find((o) => o.value === ctl?.value) ?? PERMISSION_OPTIONS[0]
+  return (
+    <div className="perm" ref={ref}>
+      <button
+        className={`perm-btn level-${current.value}`}
+        disabled={!ctl}
+        onClick={() => setOpen((o) => !o)}
+        title={ctl ? `Permissions for this ${ctl.mode === 'code' ? 'code session' : 'chat'}: ${current.label}` : 'Open a chat or code session to set its permissions'}
+      >
+        <Icon name="shield" size={15} />
+        <span className="perm-text">
+          <span className="perm-label">Permissions</span>
+          <span className="perm-value">{current.short}</span>
+        </span>
+        <Icon name="chevron" size={14} />
+      </button>
+      {open && ctl && (
+        <div className="perm-menu" role="menu">
+          <div className="perm-head">This {ctl.mode === 'code' ? 'code session' : 'chat'} only</div>
+          {PERMISSION_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              role="menuitemradio"
+              aria-checked={o.value === ctl.value}
+              className={`perm-item level-${o.value} ${o.value === ctl.value ? 'selected' : ''}`}
+              onClick={() => {
+                ctl.set(o.value)
+                setOpen(false)
+              }}
+            >
+              <span className="perm-dot" />
+              <span className="perm-item-text">
+                <b>{o.label}</b>
+                <span>{o.detail}</span>
+              </span>
+              {o.value === ctl.value && <Icon name="check" size={14} />}
+            </button>
+          ))}
+          <div className="perm-foot">New chats start with the default from Settings → General.</div>
+        </div>
+      )}
     </div>
   )
 }

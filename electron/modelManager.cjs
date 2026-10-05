@@ -103,6 +103,10 @@ class ModelManager extends EventEmitter {
       if (isCurrent) this.setStatus('unloading')
       try {
         await this.ollama.unload(model)
+        // Ollama answers before the model has fully left memory; wait until /api/ps stops listing it so
+        // the status (and VRAM meter) don't bounce back to "loaded".
+        await this.waitUntilGone(model)
+        this.unloadedAt = this.now()
         if (isCurrent) this.setStatus('unloaded')
       } catch (e) {
         if (isCurrent) this.setStatus('error', String(e.message || e))
@@ -162,7 +166,9 @@ class ModelManager extends EventEmitter {
       if (this.isLocal()) names.add(parseModelId(this.current).model)
       if (this.isLocal()) this.setStatus('unloading')
       for (const n of names) await this.ollama.unload(n).catch(() => {})
+      for (const n of names) await this.waitUntilGone(n, 5000)
       this.forcedAt = this.now()
+      this.unloadedAt = this.now()
       this.setStatus(this.isLocal() ? 'unloaded' : this.current ? 'cloud' : 'unloaded')
     })
   }
@@ -177,9 +183,25 @@ class ModelManager extends EventEmitter {
   }
 
   /** Reconcile with what Ollama actually has loaded. */
+  async waitUntilGone(model, timeoutMs = 10_000) {
+    if (typeof this.ollama.ps !== 'function') return
+    const until = Date.now() + timeoutMs
+    while (Date.now() < until) {
+      try {
+        const ps = await this.ollama.ps()
+        if (!ps.some((m) => m.name === model || m.name === model + ':latest')) return
+      } catch {
+        return
+      }
+      await new Promise((r) => setTimeout(r, 250))
+    }
+  }
+
   reconcile(psModels) {
     if (!this.isLocal() || this.busy > 0) return
     if (this.status !== 'loaded' && this.status !== 'unloaded') return
+    // Right after an unload Ollama may still list the model for a moment — don't flip back to "loaded".
+    if (this.status === 'unloaded' && this.unloadedAt && this.now() - this.unloadedAt < 15_000) return
     const name = parseModelId(this.current).model
     const loaded = psModels.some((m) => m.name === name || m.name === name + ':latest')
     if (loaded && this.status === 'unloaded') {

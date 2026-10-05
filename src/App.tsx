@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { api, type Mode, type Settings } from './lib/api'
+import { useCallback, useEffect, useState } from 'react'
+import { api, type Mode, type PermissionControl, type Settings } from './lib/api'
 import { AppProvider, useApp } from './lib/store'
 import { Onboarding } from './components/Onboarding'
 import { TopBar } from './components/TopBar'
@@ -29,6 +29,8 @@ function Shell() {
   useTheme(settings.theme)
   const [mode, setMode] = useState<Mode>('chat')
   const [settingsPage, setSettingsPage] = useState<SettingsPage | null>(null)
+  const [permissionCtl, setPermissionCtl] = useState<PermissionControl | null>(null)
+  const registerPermission = useCallback((c: PermissionControl | null) => setPermissionCtl(c), [])
 
   // Ctrl+U force-unload. The main process catches real key presses first (and stops them here);
   // this is a fallback for any that reach the page.
@@ -54,6 +56,7 @@ function Shell() {
   return (
     <div className="app">
       <TopBar
+        permission={settingsPage ? null : permissionCtl}
         mode={mode}
         onMode={(m) => {
           setMode(m)
@@ -94,6 +97,7 @@ function Shell() {
           onManageModels={() => setSettingsPage('models')}
           onOpenGithubSettings={() => setSettingsPage('github')}
           onOpenSettings={() => setSettingsPage('general')}
+          onPermissionControl={registerPermission}
         />
         <Workspace
           mode="code"
@@ -101,6 +105,7 @@ function Shell() {
           onManageModels={() => setSettingsPage('models')}
           onOpenGithubSettings={() => setSettingsPage('github')}
           onOpenSettings={() => setSettingsPage('general')}
+          onPermissionControl={registerPermission}
         />
         {settingsPage && <SettingsView page={settingsPage} onPage={setSettingsPage} onClose={() => setSettingsPage(null)} />}
       </div>

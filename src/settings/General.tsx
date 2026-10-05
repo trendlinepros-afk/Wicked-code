@@ -188,7 +188,8 @@ export function General() {
       </section>
 
       <section className="card">
-        <h3>Code session permissions</h3>
+        <h3>Default permissions for new chats</h3>
+        <p className="muted small">Each chat and code session has its own setting — change it anytime from the <b>Permissions</b> menu at the top of the app.</p>
         {(
           [
             ['ask', 'Ask before every file change and command'],

@@ -651,7 +651,7 @@ function needsNudge(content, produced) {
  * @param {string|null} p.apiKey
  * @param {object} p.ollama
  * @param {number} p.numCtx
- * @param {string} p.permissionMode
+ * @param {string | (() => string)} p.permissionMode  this session's permission level (a function so it can change mid-run)
  * @param {AbortSignal} p.signal
  * @param {(type: string, payload?: object) => void} p.emit
  * @param {(call: object) => Promise<boolean>} p.requestApproval
@@ -761,7 +761,8 @@ async function runAgent(p) {
       const allowed = tools.some((t) => t.name === call.name)
       try {
         if (!impl || !allowed) throw new Error(`Unknown or unavailable tool: ${call.name}`)
-        if (needsApproval(call.name, p.permissionMode)) {
+        const permission = typeof p.permissionMode === 'function' ? p.permissionMode() : p.permissionMode
+        if (needsApproval(call.name, permission)) {
           const ok = await p.requestApproval(call)
           if (!ok) throw new Error('The user denied this action. Ask them how they would like to proceed.')
         }

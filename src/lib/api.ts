@@ -115,7 +115,10 @@ export interface Session extends SessionMeta {
   messages: Message[]
   notePath?: string
   github?: { fullName: string; branch: string | null; url: string } | null
+  /** @deprecated older sessions; same as permissionMode 'auto-all' */
   autoApprove?: boolean
+  /** This chat's own permission level (code sessions and document saves) */
+  permissionMode?: PermissionMode
   /** 'user' once renamed by hand (never auto-renamed after that) */
   titleSource?: 'user' | 'auto' | 'pending'
 }
@@ -286,12 +289,14 @@ export interface WickedApi {
       folders: string[]
       sessionId: string
       autoApprove?: boolean
+      permissionMode?: PermissionMode
     }): Promise<{
       messages: Message[]
       aborted: boolean
     }>
     stop(runId: string): Promise<void>
     approve(requestId: string, allowed: boolean | 'all'): Promise<void>
+    setPermission(runId: string, mode: PermissionMode): Promise<void>
     onEvent(cb: (e: AgentEvent) => void): Unsub
   }
 }
@@ -320,3 +325,16 @@ export function parseModelId(id: string | null): { provider: Provider; model: st
 }
 
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+
+/** Lets the top bar show and change the visible chat's permission level. */
+export interface PermissionControl {
+  value: PermissionMode
+  set(mode: PermissionMode): void
+  mode: Mode
+}
+
+export const PERMISSION_OPTIONS: { value: PermissionMode; label: string; short: string; detail: string }[] = [
+  { value: 'ask', label: 'Ask before every change', short: 'Ask first', detail: 'Approve every file change, command and saved document.' },
+  { value: 'auto-edits', label: 'Auto-approve file edits', short: 'Auto edits', detail: 'File edits go through; still asks before running commands.' },
+  { value: 'auto-all', label: 'Auto-approve everything', short: 'Full auto', detail: 'Edits and commands run without asking. Use with care.' },
+]

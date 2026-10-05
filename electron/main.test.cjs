@@ -846,3 +846,53 @@ test('code agent: replay of the snake-game session — text tool calls run, past
     server.close()
   }
 })
+
+// ---------- unload button + per-chat permissions ----------
+
+test('unload waits until Ollama really released the model, and the status does not bounce back to loaded', async () => {
+  let listed = true
+  const calls = []
+  const ollama = {
+    load: async (m) => calls.push(['load', m]),
+    unload: async (m) => {
+      calls.push(['unload', m])
+      setTimeout(() => (listed = false), 600) // Ollama keeps listing it briefly after answering
+    },
+    ps: async () => (listed ? [{ name: 'qwen3:8b' }] : []),
+  }
+  const mm = new ModelManager({ ollama, idleSeconds: () => 30, initialModel: 'ollama:qwen3:8b' })
+  await mm.load()
+  const started = Date.now()
+  await mm.unload()
+  assert.ok(Date.now() - started >= 500, 'waited for /api/ps to drop the model')
+  assert.strictEqual(mm.status, 'unloaded')
+  mm.reconcile([{ name: 'qwen3:8b' }]) // a stale poll result arriving late
+  assert.strictEqual(mm.status, 'unloaded')
+})
+
+test('per-chat permission can be raised mid-run and releases the waiting approval', async () => {
+  const dir = tmpDir()
+  const { server, ollama } = await scriptedOllama([
+    { tool: 'write_file', args: { path: 'a.txt', content: 'A' } },
+    { tool: 'run_command', args: { command: 'echo hi' } },
+    { content: 'done' },
+  ])
+  let permission = 'ask'
+  const asked = []
+  try {
+    await runAgent({
+      mode: 'code', provider: 'ollama', model: 'm', history: [{ role: 'user', content: 'go' }], folders: [dir], memory: null, ollama, numCtx: 8192,
+      permissionMode: () => permission,
+      signal: new AbortController().signal, emit: () => {},
+      requestApproval: async (call) => {
+        asked.push(call.name)
+        permission = 'auto-all' // user picks "Auto-approve everything" from the Permissions menu while asked
+        return true
+      },
+    })
+    assert.deepStrictEqual(asked, ['write_file']) // run_command no longer needed approval
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'A')
+  } finally {
+    server.close()
+  }
+})
