@@ -1,5 +1,5 @@
 // Exposes a small, typed bridge (window.wicked) to the renderer.
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 const invoke = (channel) => (...args) => ipcRenderer.invoke(channel, ...args)
 const subscribe = (channel) => (cb) => {
@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld('wicked', {
   apiKeys: { set: invoke('apiKeys:set'), test: invoke('apiKeys:test') },
   dialog: { pickFolder: invoke('dialog:pickFolder') },
   shell: { openPath: invoke('shell:openPath') },
+  files: {
+    // Full path of a dropped File (File.path no longer exists in sandboxed renderers).
+    pathFor: (file) => webUtils.getPathForFile(file),
+    extract: invoke('files:extract'),
+    pick: invoke('files:pick'),
+  },
   vault: { inspect: invoke('vault:inspect'), set: invoke('vault:set'), openMemory: invoke('vault:openMemory') },
   sessions: {
     list: invoke('sessions:list'),

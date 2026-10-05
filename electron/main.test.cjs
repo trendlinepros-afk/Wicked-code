@@ -655,3 +655,126 @@ test('force unload (Ctrl+U) mid-reply unloads everything and stays unloaded', as
   mm.endBusy() // the aborted run finishes afterwards
   assert.strictEqual(mm.status, 'unloaded') // not flipped back to "loaded"
 })
+
+// ---------- attachments (drag & drop) ----------
+
+function makePdf(text) {
+  // Minimal one-page PDF with real (selectable) text and a correct xref table.
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    null,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ]
+  const stream = `BT /F1 18 Tf 72 700 Td (${text}) Tj ET`
+  objs[3] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`
+  let out = '%PDF-1.4\n'
+  const offsets = []
+  objs.forEach((o, i) => {
+    offsets.push(out.length)
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`
+  })
+  const xref = out.length
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`
+  return Buffer.from(out, 'latin1')
+}
+
+test('attachments: text is extracted from Word, PDF, Excel, PowerPoint and text files', async () => {
+  const { extractFiles } = require('./attachments.cjs')
+  const { markdownToDocx } = require('./docwriter.cjs')
+  const ExcelJS = require('exceljs')
+  const JSZip = require('jszip')
+  const dir = tmpDir()
+  fs.writeFileSync(path.join(dir, 'proposal.docx'), await markdownToDocx('# Q3 Proposal\n\nWe will **grow** revenue.\n\n- Hire two engineers\n- Ship v2'))
+  fs.writeFileSync(path.join(dir, 'invoice.pdf'), makePdf('Invoice total 4200 USD'))
+  const wb = new ExcelJS.Workbook()
+  const ws = wb.addWorksheet('Budget')
+  ws.addRow(['Item', 'Cost'])
+  ws.addRow(['GPU', 899])
+  await wb.xlsx.writeFile(path.join(dir, 'budget.xlsx'))
+  const zip = new JSZip()
+  zip.file('ppt/slides/slide1.xml', '<p:sld><a:p><a:r><a:t>Roadmap &amp; Goals</a:t></a:r></a:p></p:sld>')
+  zip.file('ppt/slides/slide2.xml', '<p:sld><a:p><a:r><a:t>Launch in May</a:t></a:r></a:p></p:sld>')
+  fs.writeFileSync(path.join(dir, 'deck.pptx'), await zip.generateAsync({ type: 'nodebuffer' }))
+  fs.writeFileSync(path.join(dir, 'notes.md'), '# Notes\nremember the milk')
+  fs.writeFileSync(path.join(dir, 'photo.png'), Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'))
+  fs.writeFileSync(path.join(dir, 'old.doc'), 'x')
+  fs.writeFileSync(path.join(dir, 'blob.bin'), Buffer.from([0, 1, 2, 0, 5]))
+
+  const r = Object.fromEntries((await extractFiles(fs.readdirSync(dir).map((f) => path.join(dir, f)))).map((a) => [a.name, a]))
+  assert.match(r['proposal.docx'].text, /Q3 Proposal[\s\S]*grow[\s\S]*Hire two engineers/)
+  assert.match(r['invoice.pdf'].text, /Page 1[\s\S]*Invoice total 4200 USD/)
+  assert.strictEqual(r['invoice.pdf'].pages, 1)
+  assert.match(r['budget.xlsx'].text, /## Sheet: Budget\nItem,Cost\nGPU,899/)
+  assert.match(r['deck.pptx'].text, /Slide 1 ---\nRoadmap & Goals[\s\S]*Slide 2 ---\nLaunch in May/)
+  assert.strictEqual(r['notes.md'].kind, 'text')
+  assert.strictEqual(r['photo.png'].kind, 'image')
+  assert.strictEqual(r['photo.png'].text, undefined)
+  assert.match(r['old.doc'].error, /save it as \.docx/)
+  assert.match(r['blob.bin'].error, /Unsupported/)
+})
+
+test('attachments: expanded into the user message; images go to vision payloads per provider', async () => {
+  const { expandAttachments } = require('./attachments.cjs')
+  const dir = tmpDir()
+  const png = path.join(dir, 'chart.png')
+  fs.writeFileSync(png, Buffer.from('89504e47', 'hex'))
+  const msgs = expandAttachments([
+    { role: 'user', content: 'summarise this', attachments: [{ name: 'a.docx', path: '/x/a.docx', kind: 'document', text: 'DOC BODY' }, { name: 'chart.png', path: png, kind: 'image' }] },
+  ])
+  assert.match(msgs[0].content, /<attached_file name="a.docx" path="\/x\/a.docx">\nDOC BODY\n<\/attached_file>/)
+  assert.match(msgs[0].content, /\[Attached image: chart.png\][\s\S]*summarise this$/)
+  assert.deepStrictEqual(msgs[0].images, [{ mime: 'image/png', data: Buffer.from('89504e47', 'hex').toString('base64') }])
+  assert.ok(!('attachments' in msgs[0]))
+  const { toOllamaMessages, toOpenAiMessages, toAnthropic } = require('./providers.cjs')
+  assert.deepStrictEqual(toOllamaMessages(msgs)[0].images, [msgs[0].images[0].data])
+  assert.strictEqual(toOpenAiMessages(msgs)[0].content[0].image_url.url, `data:image/png;base64,${msgs[0].images[0].data}`)
+  assert.strictEqual(toAnthropic(msgs).messages[0].content[0].source.media_type, 'image/png')
+})
+
+test('save_document writes a real .docx next to the original and never overwrites', async () => {
+  const { saveDocument } = require('./docwriter.cjs')
+  const { extractFile } = require('./attachments.cjs')
+  const dir = tmpDir()
+  fs.writeFileSync(path.join(dir, 'Report.docx'), 'ORIGINAL')
+  const msg = await saveDocument([dir], { filename: 'Report.docx', content: '# Report\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n1. First\n2. Second' })
+  assert.match(msg, /Report \(2\)\.docx[\s\S]*not overwritten/)
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'Report.docx'), 'utf8'), 'ORIGINAL')
+  const back = await extractFile(path.join(dir, 'Report (2).docx'))
+  assert.match(back.text, /Report[\s\S]*First[\s\S]*Second/)
+  await assert.rejects(saveDocument([], { filename: 'x.docx', content: 'x' }), /No attached files/)
+  await saveDocument([dir], { filename: '../../escape.md', content: 'hi' }) // path parts are stripped
+  assert.ok(fs.existsSync(path.join(dir, 'escape.md')))
+})
+
+test('chat agent reads an attached Word doc and saves an edited copy (with approval)', async () => {
+  const { markdownToDocx } = require('./docwriter.cjs')
+  const { extractFile } = require('./attachments.cjs')
+  const dir = tmpDir()
+  const original = path.join(dir, 'Letter.docx')
+  fs.writeFileSync(original, await markdownToDocx('Dear Sam,\n\nThanks for teh help.'))
+  const att = await extractFile(original)
+  const { server, requests, ollama } = await scriptedOllama([
+    { content: 'Fixed the typo.', tool: 'save_document', args: { filename: 'Letter (edited).docx', content: 'Dear Sam,\n\nThanks for the help.' } },
+    { content: 'Saved **Letter (edited).docx** next to your original.' },
+  ])
+  const approvals = []
+  try {
+    const produced = await runAgent({
+      mode: 'chat', provider: 'ollama', model: 'm', history: [{ role: 'user', content: 'fix the typos', attachments: [att] }],
+      folders: [], memory: null, ollama, numCtx: 8192, permissionMode: 'ask',
+      signal: new AbortController().signal, emit: () => {}, requestApproval: async (c) => (approvals.push(c.name), true),
+    })
+    assert.deepStrictEqual(approvals, ['save_document'])
+    assert.ok(requests[0].tools.some((t) => t.function.name === 'save_document'))
+    assert.match(requests[0].messages[1].content, /<attached_file name="Letter.docx"[\s\S]*Thanks for teh help/)
+    assert.match(requests[0].messages[0].content, /attached files/)
+    const edited = await extractFile(path.join(dir, 'Letter (edited).docx'))
+    assert.match(edited.text, /Thanks for the help/)
+    assert.match(produced[1].content, /Saved .*Letter \(edited\)\.docx/)
+  } finally {
+    server.close()
+  }
+})

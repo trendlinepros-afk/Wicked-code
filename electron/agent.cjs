@@ -6,6 +6,8 @@ const path = require('path')
 const os = require('os')
 const { spawn } = require('child_process')
 const { streamChat } = require('./providers.cjs')
+const { expandAttachments } = require('./attachments.cjs')
+const { saveDocument } = require('./docwriter.cjs')
 
 const IGNORED_DIRS = new Set([
   'node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', '.next', '.cache', '__pycache__',
@@ -197,14 +199,32 @@ const GITHUB_TOOLS = [
   },
 ]
 
-/** @param {{processes?: boolean, browser?: boolean, github?: boolean}} caps */
+const DOC_TOOLS = [
+  {
+    name: 'save_document',
+    description:
+      'Save a new document next to the user\'s attached file(s) — e.g. an edited version of their Word document. Write the full content in Markdown (headings, lists, **bold**, tables); a .docx filename produces a real Word document. Existing files are never overwritten.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filename: { type: 'string', description: 'File name only, e.g. "Proposal (edited).docx" or "summary.md".' },
+        content: { type: 'string', description: 'The complete document content in Markdown.' },
+      },
+      required: ['filename', 'content'],
+    },
+  },
+]
+
+/** @param {{processes?: boolean, browser?: boolean, github?: boolean, documents?: boolean}} caps */
 function toolsFor(mode, folders, caps = {}) {
-  if (!folders.length) return []
-  if (mode !== 'code') return READ_TOOLS
+  const docTools = caps.documents ? DOC_TOOLS : []
+  if (!folders.length) return [...docTools]
+  if (mode !== 'code') return [...READ_TOOLS, ...docTools]
   const tools = [...READ_TOOLS, ...WRITE_TOOLS]
   if (caps.processes) tools.push(...PROCESS_TOOLS)
   tools.push(...TEST_TOOLS.filter((t) => t.name !== 'browser_check' || caps.browser))
   if (caps.github) tools.push(...GITHUB_TOOLS)
+  tools.push(...docTools)
   return tools
 }
 
@@ -454,17 +474,18 @@ const IMPLEMENTATIONS = {
   http_request: httpRequest,
   browser_check: browserCheck,
   github_create_pull_request: githubCreatePr,
+  save_document: (ctx, args) => saveDocument(ctx.attachDirs || [], args),
 }
 
 function needsApproval(name, permissionMode) {
-  if (name === 'run_command' || name === 'start_process' || name === 'github_create_pull_request') return permissionMode !== 'auto-all'
+  if (name === 'run_command' || name === 'start_process' || name === 'github_create_pull_request' || name === 'save_document') return permissionMode !== 'auto-all'
   if (name === 'write_file' || name === 'edit_file') return permissionMode === 'ask'
   return false
 }
 
 // ---------- System prompt ----------
 
-async function buildSystemPrompt({ mode, folders, memory, toolsAvailable, github }) {
+async function buildSystemPrompt({ mode, folders, memory, toolsAvailable, github, attachments }) {
   const lines = []
   if (mode === 'code') {
     lines.push(
@@ -506,6 +527,15 @@ async function buildSystemPrompt({ mode, folders, memory, toolsAvailable, github
         'NOTE: The current model does not support tool calling, so you cannot read or write files directly. Answer from the listing above and ask the user to paste file contents when needed. When proposing code changes, give complete code blocks labeled with the file path.',
       )
     }
+  }
+  if (attachments) {
+    lines.push(
+      '',
+      'The user attached files. Their contents are included in their messages inside <attached_file> tags (images are attached directly when the model supports vision). Read them carefully and quote specifics.',
+      toolsAvailable
+        ? 'When the user wants a document edited or created, write the full result and call save_document (Markdown content; use a .docx name like "Original name (edited).docx" for Word files). It is saved next to their original and never overwrites it. Briefly summarise what you changed.'
+        : 'When the user wants a document edited, give the complete revised text in your reply.',
+    )
   }
   if (memory) lines.push('', 'Long-term memory from the user\'s Obsidian vault (Memory.md):', memory)
   return lines.join('\n')
@@ -571,10 +601,16 @@ function compactMessages(messages, budget) {
  */
 async function runAgent(p) {
   const produced = []
-  const caps = { processes: !!p.processes, browser: !!p.browserCheck, github: !!p.github }
+  const attachDirs = [
+    ...new Set(
+      p.history.flatMap((m) => (m.role === 'user' ? (m.attachments || []).filter((a) => !a.error && a.path).map((a) => path.dirname(a.path)) : [])),
+    ),
+  ]
+  const hasAttachments = p.history.some((m) => m.attachments?.length)
+  const caps = { processes: !!p.processes, browser: !!p.browserCheck, github: !!p.github, documents: attachDirs.length > 0 }
   let tools = toolsFor(p.mode, p.folders, caps)
   const prompt = (toolsAvailable) =>
-    buildSystemPrompt({ mode: p.mode, folders: p.folders, memory: p.memory, toolsAvailable, github: p.github?.info })
+    buildSystemPrompt({ mode: p.mode, folders: p.folders, memory: p.memory, toolsAvailable, github: p.github?.info, attachments: hasAttachments })
   let system = await prompt(tools.length > 0)
   const ctx = {
     folders: p.folders,
@@ -584,7 +620,9 @@ async function runAgent(p) {
     processes: p.processes,
     browserCheck: p.browserCheck,
     github: p.github,
+    attachDirs,
   }
+  let history = expandAttachments(p.history)
   // Rough character budget for the conversation (≈3 chars per token, leaving room for the reply).
   const budget = p.provider === 'ollama' ? Math.max(8000, (p.numCtx || 8192) * 3 - 6000) : 600_000
   const maxSteps = p.maxSteps || DEFAULT_MAX_STEPS
@@ -592,7 +630,7 @@ async function runAgent(p) {
   for (let step = 0; step < maxSteps; step++) {
     if (p.signal.aborted) break
     p.emit('turn-start')
-    const messages = compactMessages([{ role: 'system', content: system }, ...p.history, ...produced], budget)
+    const messages = compactMessages([{ role: 'system', content: system }, ...history, ...produced], budget)
     let result
     try {
       result = await streamChat({
@@ -611,6 +649,12 @@ async function runAgent(p) {
       })
     } catch (e) {
       const msg = String(e.message || e)
+      if (history.some((m) => m.images) && /image|vision|multimodal|projector/i.test(msg)) {
+        history = history.map(({ images, ...m }) => m)
+        p.emit('notice', { text: `${p.model} can't look at images, so the attached image(s) were skipped. Pick a vision model (e.g. qwen2.5vl or Qwen 3.8) to analyse images.` })
+        step--
+        continue
+      }
       if (tools.length && /does not support tools/i.test(msg)) {
         tools = []
         system = await prompt(false)

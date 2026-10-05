@@ -1,11 +1,38 @@
 import { useState } from 'react'
-import type { Message, ToolCall } from '../lib/api'
+import type { Attachment, Message, ToolCall } from '../lib/api'
 import { Markdown } from './Markdown'
 import { Icon, Spinner } from './ui'
 
+const fmtSize = (b: number) => (b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`)
+
+/** A file attached to a message (or waiting in the composer). */
+export function AttachmentChip({ att, reading, onRemove }: { att: Attachment; reading?: boolean; onRemove?: () => void }) {
+  const detail = reading
+    ? 'Reading…'
+    : att.error
+      ? att.error
+      : [att.pages ? `${att.pages} page${att.pages === 1 ? '' : 's'}` : null, att.size ? fmtSize(att.size) : null, att.truncated ? 'truncated' : null]
+          .filter(Boolean)
+          .join(' · ')
+  return (
+    <span className={`att-chip ${att.error ? 'error' : ''} ${att.kind}`} title={`${att.path}${att.error ? `\n${att.error}` : ''}`}>
+      <span className="att-icon">{reading ? <Spinner /> : <Icon name={att.kind === 'image' ? 'image' : 'file'} size={15} />}</span>
+      <span className="att-text">
+        <span className="att-name">{att.name}</span>
+        <span className="att-detail">{detail}</span>
+      </span>
+      {onRemove && (
+        <button onClick={onRemove} title="Remove">
+          <Icon name="x" size={12} />
+        </button>
+      )}
+    </span>
+  )
+}
+
 export function toolSummary(call: ToolCall): string {
   const a = call.args || {}
-  return String(a.path ?? a.command ?? a.pattern ?? a.url ?? a.title ?? a.id ?? '')
+  return String(a.path ?? a.filename ?? a.command ?? a.pattern ?? a.url ?? a.title ?? a.id ?? '')
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -15,6 +42,7 @@ const TOOL_LABELS: Record<string, string> = {
   write_file: 'Write',
   edit_file: 'Edit',
   run_command: 'Run',
+  save_document: 'Save document',
   start_process: 'Start',
   read_process_output: 'Logs',
   stop_process: 'Stop',
@@ -46,6 +74,7 @@ export function ToolArgs({ call }: { call: ToolCall }) {
       </div>
     )
   }
+  if (call.name === 'save_document') return <pre className="tool-pre">{String(a.content ?? '')}</pre>
   if (call.name === 'write_file') return <pre className="tool-pre">{String(a.content ?? '')}</pre>
   if (call.name === 'run_command' || call.name === 'start_process') return <pre className="tool-pre">$ {String(a.command ?? '')}</pre>
   if (call.name === 'github_create_pull_request') {
@@ -101,6 +130,13 @@ export function MessageList({
         if (m.role === 'user') {
           return (
             <div key={i} className="msg user">
+              {!!m.attachments?.length && (
+                <div className="msg-files">
+                  {m.attachments.map((a) => (
+                    <AttachmentChip key={a.path} att={a} />
+                  ))}
+                </div>
+              )}
               <div className="bubble">{m.content}</div>
             </div>
           )

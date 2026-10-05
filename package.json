@@ -1,7 +1,7 @@
 {
   "name": "wicked-code",
   "productName": "Wicked Code",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "A local-first Claude Code style desktop app for chat and coding, powered by Ollama with optional Gemini, Anthropic, DeepSeek and Grok APIs.",
   "main": "electron/main.cjs",
   "author": "Wicked Code",
@@ -62,11 +62,16 @@
     }
   },
   "dependencies": {
+    "docx": "^9.8.1",
     "electron-updater": "^6.8.9",
+    "exceljs": "^4.4.0",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

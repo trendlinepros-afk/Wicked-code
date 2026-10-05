@@ -77,7 +77,9 @@ function toMarkdown(session) {
   if (session.mode === 'code' && session.folders?.[0]) body.push(`**Working folder:** \`${session.folders[0]}\``, '')
   for (const m of session.messages || []) {
     if (m.role === 'user') {
-      body.push('## You', '', m.content, '')
+      body.push('## You', '')
+      if (m.attachments?.length) body.push(...m.attachments.map((a) => `> 📎 \`${a.name}\`${a.error ? ' (could not be read)' : ''}`), '')
+      body.push(m.content, '')
     } else if (m.role === 'assistant') {
       if (m.content?.trim()) body.push(`## Assistant${m.model ? ` (${m.model})` : ''}`, '', m.content, '')
       for (const c of m.toolCalls || []) {

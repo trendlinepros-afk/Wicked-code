@@ -1,5 +1,5 @@
 // Electron main process: window, IPC, model lifecycle, agent runs.
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, session, nativeTheme } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, session, nativeTheme, Menu } = require('electron')
 const path = require('path')
 const { Config, PROVIDERS } = require('./config.cjs')
 const { Ollama } = require('./ollama.cjs')
@@ -10,6 +10,7 @@ const { runAgent } = require('./agent.cjs')
 const { Vault, setupVault, inspectVault } = require('./vault.cjs')
 const { Updater } = require('./updater.cjs')
 const { generateTitle } = require('./titles.cjs')
+const { extractFiles } = require('./attachments.cjs')
 const { ProcessManager } = require('./processes.cjs')
 const { GitHub, repoInfo, slugify } = require('./github.cjs')
 const { OllamaLauncher } = require('./ollamaLauncher.cjs')
@@ -88,6 +89,49 @@ function createWindow() {
       forceUnload()
     }
   })
+  // Right-click menu: spelling suggestions + "Add to dictionary" for misspelled words, and the usual
+  // Cut / Copy / Paste / Select all.
+  win.webContents.on('context-menu', (_e, params) => {
+    const wc = win.webContents
+    const items = []
+    if (params.misspelledWord) {
+      const suggestions = params.dictionarySuggestions.slice(0, 6)
+      for (const s of suggestions) items.push({ label: s, click: () => wc.replaceMisspelling(s) })
+      if (!suggestions.length) items.push({ label: 'No spelling suggestions', enabled: false })
+      items.push(
+        { type: 'separator' },
+        { label: `Add “${params.misspelledWord}” to dictionary`, click: () => wc.session.addWordToSpellCheckerDictionary(params.misspelledWord) },
+        { type: 'separator' },
+      )
+    }
+    if (params.isEditable) {
+      const f = params.editFlags
+      items.push(
+        { label: 'Undo', role: 'undo', enabled: f.canUndo },
+        { label: 'Redo', role: 'redo', enabled: f.canRedo },
+        { type: 'separator' },
+        { label: 'Cut', role: 'cut', enabled: f.canCut },
+        { label: 'Copy', role: 'copy', enabled: f.canCopy },
+        { label: 'Paste', role: 'paste', enabled: f.canPaste },
+        { type: 'separator' },
+        { label: 'Select all', role: 'selectAll', enabled: f.canSelectAll },
+      )
+    } else if (params.selectionText.trim()) {
+      items.push({ label: 'Copy', role: 'copy' })
+    }
+    if (params.linkURL && /^https?:/.test(params.linkURL)) {
+      if (items.length) items.push({ type: 'separator' })
+      items.push({ label: 'Open link in browser', click: () => shell.openExternal(params.linkURL) })
+    }
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: win })
+  })
+  // Spell-check in the user's language (Windows/macOS use the OS spell checker automatically).
+  if (process.platform !== 'darwin') {
+    const langs = session.defaultSession.availableSpellCheckerLanguages
+    const want = [app.getLocale(), 'en-US'].filter((l, i, a) => langs.includes(l) && a.indexOf(l) === i)
+    if (want.length) session.defaultSession.setSpellCheckerLanguages(want)
+  }
+
   // Open external links in the user's browser rather than inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url)
@@ -202,6 +246,25 @@ function registerIpc() {
     return r.canceled ? null : r.filePaths[0]
   })
   handle('shell:openPath', (p) => shell.openPath(p))
+
+  // ----- attachments (drag & drop / 📎) -----
+  handle('files:extract', async (paths) => {
+    const started = Date.now()
+    const out = await extractFiles((paths || []).filter(Boolean))
+    log('files', 'extracted', { files: out.map((f) => ({ ext: f.ext, size: f.size, chars: f.chars, error: f.error })), ms: Date.now() - started })
+    return out
+  })
+  handle('files:pick', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      title: 'Attach files',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Documents, text & images', extensions: ['docx', 'pdf', 'xlsx', 'xlsm', 'pptx', 'txt', 'md', 'csv', 'json', 'html', 'xml', 'log', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'js', 'ts', 'tsx', 'py', 'java', 'cs', 'cpp', 'c', 'go', 'rs', 'rb', 'php', 'sql', 'yaml', 'yml', 'toml', 'ini', 'sh', 'ps1'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    })
+    return r.canceled ? [] : extractFiles(r.filePaths)
+  })
 
   // ----- vault -----
   handle('vault:inspect', (p) => inspectVault(p))

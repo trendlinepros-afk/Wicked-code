@@ -78,6 +78,7 @@ function toOllamaMessages(messages) {
       }
     }
     if (m.role === 'tool') return { role: 'tool', content: m.content, tool_name: m.toolName }
+    if (m.images?.length) return { role: m.role, content: m.content, images: m.images.map((i) => i.data) }
     return { role: m.role, content: m.content }
   })
 }
@@ -138,6 +139,15 @@ function toOpenAiMessages(messages) {
       }
     }
     if (m.role === 'tool') return { role: 'tool', tool_call_id: m.toolCallId, content: m.content }
+    if (m.images?.length) {
+      return {
+        role: m.role,
+        content: [
+          ...m.images.map((i) => ({ type: 'image_url', image_url: { url: `data:${i.mime};base64,${i.data}` } })),
+          { type: 'text', text: m.content },
+        ],
+      }
+    }
     return { role: m.role, content: m.content }
   })
 }
@@ -209,7 +219,8 @@ function toAnthropic(messages) {
       for (const c of m.toolCalls || []) blocks.push({ type: 'tool_use', id: c.id, name: c.name, input: c.args ?? {} })
       if (blocks.length) push('assistant', blocks)
     } else {
-      push('user', [{ type: 'text', text: m.content || ' ' }])
+      const images = (m.images || []).map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mime, data: i.data } }))
+      push('user', [...images, { type: 'text', text: m.content || ' ' }])
     }
   }
   return { system, messages: out }

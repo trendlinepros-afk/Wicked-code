@@ -40,7 +40,15 @@ function Shell() {
       }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // Dropping a file outside the chat area must not navigate the window to it.
+    const stop = (e: Event) => e.preventDefault()
+    window.addEventListener('dragover', stop)
+    window.addEventListener('drop', stop)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('dragover', stop)
+      window.removeEventListener('drop', stop)
+    }
   }, [])
 
   return (

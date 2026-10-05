@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, parseModelId, uid, type Message, type Mode, type ProcessInfo, type Session, type SessionMeta, type ToolCall } from '../lib/api'
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
+import { api, parseModelId, uid, type Attachment, type Message, type Mode, type ProcessInfo, type Session, type SessionMeta, type ToolCall } from '../lib/api'
 import { useApp } from '../lib/store'
-import { MessageList, ToolArgs, EmptyIcon } from './Messages'
+import { MessageList, ToolArgs, EmptyIcon, AttachmentChip } from './Messages'
 import { ModelPicker } from './ModelPicker'
 import { ConfirmDialog, Icon, Spinner, basename } from './ui'
 import { NewCodeSessionDialog } from './NewCodeSession'
@@ -49,6 +49,10 @@ export function Workspace({
   const [active, setActive] = useState<Session | null>(null)
   const [run, setRun] = useState<RunState | null>(null)
   const [input, setInput] = useState('')
+  // Files waiting to be sent with the next message (drag & drop or 📎).
+  const [pendingFiles, setPendingFiles] = useState<(Attachment & { reading?: boolean })[]>([])
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
   const [confirmDelete, setConfirmDelete] = useState<SessionMeta | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showNewCode, setShowNewCode] = useState(false)
@@ -208,15 +212,43 @@ export function Workspace({
     }
   }
 
+  const attachPaths = async (paths: string[]) => {
+    const fresh = paths.filter((p) => p && !pendingFiles.some((f) => f.path === p))
+    if (!fresh.length) return
+    const placeholders = fresh.map((p) => ({ name: basename(p), path: p, ext: '', size: 0, kind: 'document' as const, reading: true }))
+    setPendingFiles((cur) => [...cur, ...placeholders])
+    const extracted = await api().files.extract(fresh)
+    setPendingFiles((cur) => cur.map((f) => extracted.find((x) => x.path === f.path) ?? f))
+    api().model.touch() // attaching counts as activity (and starts loading the model)
+    inputRef.current?.focus()
+  }
+
+  const pickFiles = async () => {
+    const picked = await api().files.pick()
+    if (picked.length) setPendingFiles((cur) => [...cur, ...picked.filter((p) => !cur.some((c) => c.path === p.path))])
+    inputRef.current?.focus()
+  }
+
+  const onDrop = (e: DragEvent<HTMLElement>) => {
+    e.preventDefault()
+    dragDepth.current = 0
+    setDragging(false)
+    if (needsFolder) return
+    const files = Array.from(e.dataTransfer.files)
+    attachPaths(files.map((f) => api().files.pathFor(f)))
+  }
+
   const send = async () => {
-    const text = input.trim()
-    if (!text || run) return
+    const files = pendingFiles.filter((f) => !f.reading)
+    const text = input.trim() || (files.length ? 'Please look at the attached file' + (files.length > 1 ? 's.' : '.') : '')
+    if (!text || run || pendingFiles.some((f) => f.reading)) return
     const modelId = settings.selectedModel
     if (!modelId) return setError('Select a model first (bottom right).')
     if (mode === 'code' && !active?.folders.length) return setError('Choose a working folder before starting a code session.')
 
     let session = active ?? newSession(mode, modelId, [])
     const userMsg: Message = { role: 'user', content: text }
+    if (files.length) userMsg.attachments = files.map(({ reading: _r, ...f }) => f)
     const isFirst = session.messages.length === 0
     session = {
       ...session,
@@ -229,6 +261,7 @@ export function Workspace({
     }
     setActive(session)
     setInput('')
+    setPendingFiles([])
     setError(null)
     stickToBottom.current = true
     session = await persist(session)
@@ -428,7 +461,31 @@ export function Workspace({
         </div>
       </aside>
 
-      <section className="main-pane">
+      <section
+        className="main-pane"
+        onDragEnter={(e) => {
+          if (!e.dataTransfer.types.includes('Files')) return
+          dragDepth.current++
+          setDragging(true)
+        }}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) e.preventDefault()
+        }}
+        onDragLeave={() => {
+          dragDepth.current = Math.max(0, dragDepth.current - 1)
+          if (!dragDepth.current) setDragging(false)
+        }}
+        onDrop={onDrop}
+      >
+        {dragging && (
+          <div className="drop-overlay">
+            <div className="drop-card">
+              <Icon name="paperclip" size={28} />
+              <b>{needsFolder ? 'Choose a working folder first' : 'Drop files to attach'}</b>
+              <span className="muted small">Word, PDF, Excel, PowerPoint, text & code files, and images</span>
+            </div>
+          </div>
+        )}
         {active && (active.notePath || active.mode === 'code') && (
           <div className="pane-head">
             <div className="pane-title">{active.title}</div>
@@ -519,6 +576,8 @@ export function Workspace({
                         ? 'Start this background process?'
                         : a.call.name === 'github_create_pull_request'
                           ? 'Open this pull request on GitHub?'
+                          : a.call.name === 'save_document'
+                            ? `Save “${String(a.call.args.filename)}” next to your file?`
                           : a.call.name === 'edit_file'
                             ? `Edit ${String(a.call.args.path)}?`
                             : `Write ${String(a.call.args.path)}?`}
@@ -543,7 +602,17 @@ export function Workspace({
 
         <div className="composer-wrap">
           <div className={`composer ${needsFolder ? 'disabled' : ''}`}>
+            {pendingFiles.length > 0 && (
+              <div className="composer-files">
+                {pendingFiles.map((f) => (
+                  <AttachmentChip key={f.path} att={f} reading={f.reading} onRemove={() => setPendingFiles((cur) => cur.filter((x) => x.path !== f.path))} />
+                ))}
+              </div>
+            )}
             <div className="composer-folders">
+              <button className="folder-add" onClick={pickFiles} disabled={needsFolder} title="Attach files (or drag & drop them anywhere here)">
+                <Icon name="paperclip" size={13} /> Attach
+              </button>
               {folders.map((f, i) => (
                 <span key={f} className={`folder-chip ${mode === 'code' && i === 0 ? 'primary' : ''}`} title={f}>
                   <Icon name="folder" size={13} />
@@ -590,7 +659,12 @@ export function Workspace({
                     <Icon name="stop" size={16} />
                   </button>
                 ) : (
-                  <button className="send-btn" onClick={send} disabled={!input.trim() || needsFolder} title="Send">
+                  <button
+                    className="send-btn"
+                    onClick={send}
+                    disabled={(!input.trim() && !pendingFiles.length) || pendingFiles.some((f) => f.reading) || needsFolder}
+                    title="Send"
+                  >
                     <Icon name="send" size={16} />
                   </button>
                 )}

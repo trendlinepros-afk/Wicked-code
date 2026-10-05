@@ -32,9 +32,24 @@ export interface ToolCall {
   args: Record<string, unknown>
 }
 
+export interface Attachment {
+  name: string
+  path: string
+  ext: string
+  size: number
+  kind: 'document' | 'text' | 'image'
+  mime?: string
+  text?: string // extracted contents (documents/text)
+  truncated?: boolean
+  pages?: number
+  chars?: number
+  error?: string
+}
+
 export interface Message {
   role: 'user' | 'assistant' | 'tool'
   content: string
+  attachments?: Attachment[]
   toolCalls?: ToolCall[]
   toolCallId?: string
   toolName?: string
@@ -189,6 +204,11 @@ export interface WickedApi {
   }
   dialog: { pickFolder(title?: string): Promise<string | null> }
   shell: { openPath(p: string): Promise<string> }
+  files: {
+    pathFor(file: File): string
+    extract(paths: string[]): Promise<Attachment[]>
+    pick(): Promise<Attachment[]>
+  }
   vault: {
     inspect(p: string): Promise<{ exists: boolean; isObsidian: boolean }>
     set(p: string): Promise<Settings>
