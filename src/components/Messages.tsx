@@ -32,7 +32,7 @@ export function AttachmentChip({ att, reading, onRemove }: { att: Attachment; re
 
 export function toolSummary(call: ToolCall): string {
   const a = call.args || {}
-  return String(a.path ?? a.filename ?? a.command ?? a.pattern ?? a.url ?? a.title ?? a.id ?? '')
+  return String(a.path ?? a.filename ?? a.target ?? a.command ?? a.pattern ?? a.url ?? a.title ?? a.id ?? '')
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -43,6 +43,7 @@ const TOOL_LABELS: Record<string, string> = {
   edit_file: 'Edit',
   run_command: 'Run',
   save_document: 'Save document',
+  open_in_browser: 'Open',
   start_process: 'Start',
   read_process_output: 'Logs',
   stop_process: 'Stop',
@@ -127,6 +128,13 @@ export function MessageList({
     <>
       {messages.map((m, i) => {
         if (m.role === 'tool') return null
+        if (m.role === 'user' && m.synthetic) {
+          return (
+            <div key={i} className="msg nudge" title={m.content}>
+              <Icon name="refresh" size={13} /> Wicked Code reminded the model to actually do the work with tools
+            </div>
+          )
+        }
         if (m.role === 'user') {
           return (
             <div key={i} className="msg user">

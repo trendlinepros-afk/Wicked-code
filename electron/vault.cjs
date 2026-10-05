@@ -76,7 +76,9 @@ function toMarkdown(session) {
   const body = [`# ${session.title}`, '']
   if (session.mode === 'code' && session.folders?.[0]) body.push(`**Working folder:** \`${session.folders[0]}\``, '')
   for (const m of session.messages || []) {
-    if (m.role === 'user') {
+    if (m.role === 'user' && m.synthetic) {
+      body.push('> [!note] Wicked Code reminded the model to do the work with tools', '')
+    } else if (m.role === 'user') {
       body.push('## You', '')
       if (m.attachments?.length) body.push(...m.attachments.map((a) => `> 📎 \`${a.name}\`${a.error ? ' (could not be read)' : ''}`), '')
       body.push(m.content, '')

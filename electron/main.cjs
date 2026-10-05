@@ -488,6 +488,16 @@ function registerIpc() {
         owner: sessionId,
         processes: mode === 'code' ? processes : null,
         browserCheck: mode === 'code' ? browserCheck : null,
+        openForUser:
+          mode === 'code'
+            ? async ({ path: file, url }) => {
+                log('agent', 'open for user', { file, url })
+                if (file) {
+                  const err = await shell.openPath(file)
+                  if (err) throw new Error(err)
+                } else await shell.openExternal(url)
+              }
+            : null,
         github: ghTools,
         env: github.authEnv(),
         maxSteps: Number(config.get('maxAgentSteps')) || 100,

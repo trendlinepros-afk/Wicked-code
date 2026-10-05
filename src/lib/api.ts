@@ -56,6 +56,8 @@ export interface Message {
   isError?: boolean
   model?: string
   thinking?: string
+  /** Reminder the app sent to the model (shown as a small note, not as the user's message) */
+  synthetic?: boolean
 }
 
 export interface RepoInfo {
@@ -172,6 +174,7 @@ export type AgentEvent =
   | { runId: string; type: 'notice'; text: string }
   | { runId: string; type: 'assistant'; message: Message }
   | { runId: string; type: 'tool-result'; message: Message }
+  | { runId: string; type: 'nudge'; message: Message }
   | { runId: string; type: 'approval'; requestId: string; call: ToolCall }
 
 type Unsub = () => void

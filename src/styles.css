@@ -2438,3 +2438,39 @@ kbd {
   background: var(--bg-4);
   color: var(--text);
 }
+.msg.nudge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+  margin: -6px 0 14px;
+  font-size: 12px;
+  color: var(--warn-text);
+}
+.skill-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 860px;
+  margin: 0 auto 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(245, 179, 66, 0.4);
+  background: rgba(245, 179, 66, 0.08);
+  color: var(--warn-text);
+  font-size: 12.5px;
+}
+.skill-text {
+  flex: 1;
+  color: var(--text-2);
+}
+.skill-text b {
+  color: var(--text);
+}
+.skill-close {
+  display: grid;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  padding: 2px;
+}

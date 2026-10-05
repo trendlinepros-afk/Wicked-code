@@ -6,6 +6,7 @@ import { ModelPicker } from './ModelPicker'
 import { ConfirmDialog, Icon, Spinner, basename } from './ui'
 import { NewCodeSessionDialog } from './NewCodeSession'
 import { SidebarUpdateButton } from './Updates'
+import { ToolSkillBanner } from './ToolSkillBanner'
 
 interface RunState {
   runId: string
@@ -128,6 +129,7 @@ export function Workspace({
             }))
             break
           case 'tool-result':
+          case 'nudge':
             updateRun((r) => ({ ...r, produced: [...r.produced, e.message] }))
             break
           case 'approval':
@@ -601,6 +603,7 @@ export function Workspace({
         </div>
 
         <div className="composer-wrap">
+          {mode === 'code' && !needsFolder && <ToolSkillBanner onManageModels={onManageModels} />}
           <div className={`composer ${needsFolder ? 'disabled' : ''}`}>
             {pendingFiles.length > 0 && (
               <div className="composer-files">

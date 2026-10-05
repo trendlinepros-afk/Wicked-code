@@ -8,6 +8,7 @@ const { spawn } = require('child_process')
 const { streamChat } = require('./providers.cjs')
 const { expandAttachments } = require('./attachments.cjs')
 const { saveDocument } = require('./docwriter.cjs')
+const { parseTextToolCalls } = require('./toolparse.cjs')
 
 const IGNORED_DIRS = new Set([
   'node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', '.next', '.cache', '__pycache__',
@@ -181,6 +182,19 @@ const TEST_TOOLS = [
   },
 ]
 
+const OPEN_TOOLS = [
+  {
+    name: 'open_in_browser',
+    description:
+      'Open something you built for the user to try: an .html file in the working folder (opens in their default browser) or a local server URL like http://localhost:3000. Use this after you have built and tested a web page, game or app.',
+    parameters: {
+      type: 'object',
+      properties: { target: { type: 'string', description: 'Relative file path (e.g. "index.html") or http://localhost URL.' } },
+      required: ['target'],
+    },
+  },
+]
+
 const GITHUB_TOOLS = [
   {
     name: 'github_create_pull_request',
@@ -223,6 +237,7 @@ function toolsFor(mode, folders, caps = {}) {
   const tools = [...READ_TOOLS, ...WRITE_TOOLS]
   if (caps.processes) tools.push(...PROCESS_TOOLS)
   tools.push(...TEST_TOOLS.filter((t) => t.name !== 'browser_check' || caps.browser))
+  if (caps.open) tools.push(...OPEN_TOOLS)
   if (caps.github) tools.push(...GITHUB_TOOLS)
   tools.push(...docTools)
   return tools
@@ -455,6 +470,20 @@ async function browserCheck(ctx, args) {
   return truncate(await ctx.browserCheck({ url: target, waitMs: Number(args.wait_ms) || 1500, script: args.script }), 12_000)
 }
 
+async function openInBrowser(ctx, args) {
+  if (!ctx.openForUser) throw new Error('Opening things for the user is not available.')
+  const target = String(args.target || '').trim()
+  if (/^https?:/i.test(target)) {
+    if (!LOCAL_HOSTS.has(new URL(target).hostname)) throw new Error('Only local URLs (localhost) can be opened.')
+    await ctx.openForUser({ url: target })
+    return `Opened ${target} in the user's browser.`
+  }
+  const file = resolvePath(ctx.folders, target.replace(/^file:\/\//, ''))
+  if (!fs.existsSync(file)) throw new Error(`${target} does not exist yet — create it with write_file first.`)
+  await ctx.openForUser({ path: file })
+  return `Opened ${path.relative(ctx.folders[0], file) || file} for the user.`
+}
+
 async function githubCreatePr(ctx, args) {
   if (!ctx.github) throw new Error('This folder is not a GitHub repository, or no GitHub token is set.')
   return ctx.github.createPullRequest(args)
@@ -475,6 +504,7 @@ const IMPLEMENTATIONS = {
   browser_check: browserCheck,
   github_create_pull_request: githubCreatePr,
   save_document: (ctx, args) => saveDocument(ctx.attachDirs || [], args),
+  open_in_browser: openInBrowser,
 }
 
 function needsApproval(name, permissionMode) {
@@ -499,6 +529,11 @@ async function buildSystemPrompt({ mode, folders, memory, toolsAvailable, github
       '4. When anything fails, read the error carefully, fix the cause, and run the check again. Repeat until everything passes. Do not stop at the first error and do not claim success without having run it.',
       '5. Stop background processes you started once you are done with them.',
       'Install missing dependencies when needed. Keep the user informed with brief updates, and finish with a short summary of what you changed and how you verified it (including the final test result).',
+      '',
+      'RULES:',
+      '- Do the work with tools. Create and change files ONLY with write_file / edit_file — never paste whole files into your reply and never ask the user to create files themselves.',
+      '- Never claim you created, changed, ran or tested anything unless a tool result in this conversation shows it. Never assume what a tool would return — call it and wait for the result.',
+      '- For a web page, browser game or front-end app: write a self-contained index.html (inline CSS and JS unless the user asks otherwise), verify it with browser_check (check for console errors and that it renders), then call open_in_browser so the user can try it.',
     )
     if (github) {
       lines.push(
@@ -580,6 +615,29 @@ function compactMessages(messages, budget) {
   return out
 }
 
+// ---------- Keeping small models honest ----------
+
+const CLAIMS_WORK = /\b(I(?:'ve| have)? (?:created|written|wrote|saved|added|updated|modified|implemented|built|ran|run|tested|launched)|(?:has|have) been (?:created|saved|written|updated|added))\b/i
+
+/**
+ * If the model ended its turn without doing real work — pasting code instead of writing files, or
+ * claiming it created/ran things when no tool did — return a reminder to send back to it.
+ */
+function needsNudge(content, produced) {
+  const results = produced.filter((m) => m.role === 'tool')
+  const wrote = results.some((m) => !m.isError && (m.toolName === 'write_file' || m.toolName === 'edit_file'))
+  const ran = results.some((m) => !m.isError && ['run_command', 'start_process', 'browser_check', 'http_request', 'open_in_browser'].includes(m.toolName))
+  const fences = [...String(content).matchAll(/```[\w-]*\n([\s\S]*?)```/g)]
+  const pastedCode = fences.some((f) => f[1].split('\n').length >= 6)
+  if (pastedCode && !wrote) {
+    return '[Wicked Code] You put code in your reply but did not create or change any files. Use write_file (or edit_file) to save it in the working folder now — do not paste it in chat — then run or open it to test that it works.'
+  }
+  if (CLAIMS_WORK.test(content) && !wrote && !ran) {
+    return '[Wicked Code] You said you created/ran/tested something, but no tool did that in this conversation turn. Actually do it now with the tools (write_file, run_command, browser_check, open_in_browser), then report the real results.'
+  }
+  return null
+}
+
 // ---------- Agent loop ----------
 
 /**
@@ -607,7 +665,7 @@ async function runAgent(p) {
     ),
   ]
   const hasAttachments = p.history.some((m) => m.attachments?.length)
-  const caps = { processes: !!p.processes, browser: !!p.browserCheck, github: !!p.github, documents: attachDirs.length > 0 }
+  const caps = { processes: !!p.processes, browser: !!p.browserCheck, github: !!p.github, documents: attachDirs.length > 0, open: !!p.openForUser }
   let tools = toolsFor(p.mode, p.folders, caps)
   const prompt = (toolsAvailable) =>
     buildSystemPrompt({ mode: p.mode, folders: p.folders, memory: p.memory, toolsAvailable, github: p.github?.info, attachments: hasAttachments })
@@ -621,11 +679,13 @@ async function runAgent(p) {
     browserCheck: p.browserCheck,
     github: p.github,
     attachDirs,
+    openForUser: p.openForUser,
   }
   let history = expandAttachments(p.history)
   // Rough character budget for the conversation (≈3 chars per token, leaving room for the reply).
   const budget = p.provider === 'ollama' ? Math.max(8000, (p.numCtx || 8192) * 3 - 6000) : 600_000
   const maxSteps = p.maxSteps || DEFAULT_MAX_STEPS
+  let nudgesLeft = 2
 
   for (let step = 0; step < maxSteps; step++) {
     if (p.signal.aborted) break
@@ -665,11 +725,30 @@ async function runAgent(p) {
       throw e
     }
 
+    // Models that type tool calls as JSON text instead of using the tool channel.
+    if (!result.toolCalls.length && tools.length) {
+      const parsed = parseTextToolCalls(result.content, tools.map((t) => t.name))
+      if (parsed.calls.length) {
+        result = { content: parsed.text, toolCalls: parsed.calls.map((c, i) => ({ id: `textcall_${step}_${i}`, ...c })) }
+      }
+    }
+
     const assistant = { role: 'assistant', content: result.content }
     if (result.toolCalls.length) assistant.toolCalls = result.toolCalls
     produced.push(assistant)
     p.emit('assistant', { message: assistant })
-    if (!result.toolCalls.length) break
+    if (!result.toolCalls.length) {
+      // Code mode: don't let the model stop after pasting code or claiming work it didn't do.
+      const nudge = p.mode === 'code' && tools.some((t) => t.name === 'write_file') && nudgesLeft > 0 ? needsNudge(result.content, produced) : null
+      if (nudge) {
+        nudgesLeft--
+        const msg = { role: 'user', content: nudge, synthetic: true }
+        produced.push(msg)
+        p.emit('nudge', { message: msg })
+        continue
+      }
+      break
+    }
 
     if (step === maxSteps - 1) {
       p.emit('notice', { text: `Stopped after ${maxSteps} steps. Send “continue” to keep going.` })
@@ -699,4 +778,4 @@ async function runAgent(p) {
   return produced
 }
 
-module.exports = { runAgent, resolvePath, buildSystemPrompt, toolsFor, IMPLEMENTATIONS, needsApproval, compactMessages, truncate }
+module.exports = { needsNudge, runAgent, resolvePath, buildSystemPrompt, toolsFor, IMPLEMENTATIONS, needsApproval, compactMessages, truncate }

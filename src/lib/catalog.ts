@@ -56,7 +56,7 @@ export const CATALOG: CatalogModel[] = [
     display: 'Qwen3 32B',
     sizeGB: 20,
     vramGB: 23,
-    tags: ['reasoning', 'general', 'coding'],
+    tags: ['reasoning', 'general', 'coding', 'agentic'],
     strengths: 'Strong all-rounder with switchable thinking mode for hard math and logic.',
     weaknesses: 'Heavy for 24 GB cards once context grows; thinking mode is slow.',
   },
@@ -66,7 +66,7 @@ export const CATALOG: CatalogModel[] = [
     display: 'Qwen3 14B',
     sizeGB: 9.3,
     vramGB: 11,
-    tags: ['general', 'reasoning', 'coding'],
+    tags: ['general', 'reasoning', 'coding', 'agentic'],
     strengths: 'Sweet spot for 12–16 GB GPUs; good reasoning and tool use.',
     weaknesses: 'Noticeably less capable than 27B+ models on complex multi-file coding.',
   },
@@ -76,7 +76,7 @@ export const CATALOG: CatalogModel[] = [
     display: 'Qwen3 8B',
     sizeGB: 5.2,
     vramGB: 6.5,
-    tags: ['general', 'fast'],
+    tags: ['general', 'fast', 'agentic'],
     strengths: 'Fast and capable for everyday chat on 8 GB GPUs; supports tools.',
     weaknesses: 'Limited depth on hard coding or research questions; more hallucinations.',
   },
@@ -318,4 +318,20 @@ export function vramNeededGB(name: string, ctx: number, installed?: { size: numb
   const kvPer1K = info?.kvPer1K ?? (p ? 0.014 * Math.min(p, 24) : 0.15)
   const extra = ((ctx || BASE_CONTEXT) - BASE_CONTEXT) / 1024 * kvPer1K
   return Math.round(Math.max(base * 0.85, base + extra) * 10) / 10
+}
+
+/**
+ * How reliably a model uses tools (needed in Code mode to create files, run and test code).
+ * 'good' = known to handle tool calling well; 'poor' = known to be unreliable; 'unknown' otherwise.
+ */
+export function toolSkill(modelId: string): 'good' | 'poor' | 'unknown' {
+  const i = modelId.indexOf(':')
+  const provider = i < 0 ? 'ollama' : modelId.slice(0, i)
+  if (provider !== 'ollama') return 'good' // Anthropic, Gemini, DeepSeek, Grok
+  const name = modelId.slice(i + 1)
+  const info = catalogInfo(name)
+  if (info) return info.tags.includes('agentic') ? 'good' : 'poor'
+  if (/qwen3|devstral|gpt-oss|mistral-small|granite3|command-r|llama3\.3/i.test(name)) return 'good'
+  if (/coder:?(1\.5|3|7)b|gemma|deepseek-r1|phi|llava|vision|vl[:\b]|tinyllama|:1b|:3b/i.test(name)) return 'poor'
+  return 'unknown'
 }

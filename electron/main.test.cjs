@@ -778,3 +778,71 @@ test('chat agent reads an attached Word doc and saves an edited copy (with appro
     server.close()
   }
 })
+
+// ---------- small models that type tool calls as text (qwen2.5-coder:7b) ----------
+
+test('tool calls typed as JSON text are recognised and removed from the reply', () => {
+  const { parseTextToolCalls } = require('./toolparse.cjs')
+  const names = ['list_files', 'write_file', 'run_command']
+  // Exactly the shape qwen2.5-coder:7b produced in the user's session.
+  const reply =
+    '{"name":"list_files","arguments":{"path":"."}}\n\n// Assuming list_files returns an empty array, let\'s create a new file for our snake game\n\n' +
+    '{"name":"write_file","arguments":{"path":"snake_game.js","content":"const canvas = document.createElement(\'canvas\');\\ncanvas.width = 800;\\nif (a) { b(); }"}}'
+  const r = parseTextToolCalls(reply, names)
+  assert.deepStrictEqual(r.calls.map((c) => c.name), ['list_files', 'write_file'])
+  assert.strictEqual(r.calls[1].args.path, 'snake_game.js')
+  assert.match(r.calls[1].args.content, /canvas.width = 800;\nif \(a\) \{ b\(\); \}/)
+  assert.strictEqual(r.text, "// Assuming list_files returns an empty array, let's create a new file for our snake game")
+  // other wrappers: <tool_call> tags, ```json fences, {"function": …}, raw newlines inside strings, string arguments
+  assert.strictEqual(parseTextToolCalls('<tool_call>\n{"name": "run_command", "arguments": {"command": "npm test"}}\n</tool_call>', names).calls[0].args.command, 'npm test')
+  assert.strictEqual(parseTextToolCalls('```json\n{"function": {"name": "list_files", "arguments": "{\\"path\\": \\"src\\"}"}}\n```', names).calls[0].args.path, 'src')
+  assert.strictEqual(parseTextToolCalls('{"name":"write_file","arguments":{"path":"a.txt","content":"line1\nline2"}}', names).calls[0].args.content, 'line1\nline2')
+  // not tool calls: unknown names, plain JS objects, prose
+  assert.strictEqual(parseTextToolCalls('{"name":"delete_everything","arguments":{}}', names).calls.length, 0)
+  assert.strictEqual(parseTextToolCalls('let apple = {x: 1, y: 2}', names).calls.length, 0)
+  assert.strictEqual(parseTextToolCalls('Here you go.', names).text, 'Here you go.')
+})
+
+test('needsNudge catches pasted code and claimed-but-not-done work', () => {
+  const { needsNudge } = require('./agent.cjs')
+  const code = 'Here it is:\n```html\n<html>\n<body>\n<canvas></canvas>\n<script>\nlet x = 1\n</script>\n</body>\n</html>\n```'
+  assert.match(needsNudge(code, []), /did not create or change any files/)
+  assert.match(needsNudge('I have created index.html and tested it.', []), /no tool did that/)
+  const wrote = [{ role: 'tool', toolName: 'write_file', content: 'Created index.html' }]
+  assert.strictEqual(needsNudge(code, wrote), null)
+  assert.strictEqual(needsNudge('I created index.html.', wrote), null)
+  assert.strictEqual(needsNudge('What should the snake look like?', []), null)
+})
+
+test('code agent: replay of the snake-game session — text tool calls run, pasted code is nudged into real files, game is opened', async () => {
+  const dir = tmpDir()
+  const html = '<!doctype html><html><body style="background:#fff"><canvas id="c"></canvas><script>/* snake */</script></body></html>'
+  const { server, requests, ollama } = await scriptedOllama([
+    // 1) qwen2.5-coder style: tool call as text, plus a hallucinated assumption
+    { content: '{"name":"list_files","arguments":{"path":"."}}\n\n// Assuming list_files returns an empty array, let\'s create the game' },
+    // 2) pastes code instead of writing it, and claims success
+    { content: 'I have created the snake game:\n```html\n<!doctype html>\n<html>\n<body>\n<canvas></canvas>\n<script></script>\n</body>\n</html>\n```' },
+    // 3) after the reminder it actually writes the file (still as text)
+    { content: '{"name":"write_file","arguments":{"path":"index.html","content":' + JSON.stringify(html) + '}}' },
+    { content: 'Opening it for you.', tool: 'open_in_browser', args: { target: 'index.html' } },
+    { content: 'Created **index.html** and opened it in your browser.' },
+  ])
+  const opened = []
+  try {
+    const produced = await runAgent({
+      mode: 'code', provider: 'ollama', model: 'qwen2.5-coder:7b', history: [{ role: 'user', content: 'create the snake game' }],
+      folders: [dir], memory: null, ollama, numCtx: 8192, permissionMode: 'auto-all',
+      openForUser: async (t) => opened.push(t),
+      signal: new AbortController().signal, emit: () => {}, requestApproval: async () => true,
+    })
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'index.html'), 'utf8'), html)
+    assert.deepStrictEqual(opened, [{ path: path.join(dir, 'index.html') }])
+    const roles = produced.map((m) => (m.synthetic ? 'nudge' : m.role === 'tool' ? `tool:${m.toolName}` : m.role))
+    assert.deepStrictEqual(roles, ['assistant', 'tool:list_files', 'assistant', 'nudge', 'assistant', 'tool:write_file', 'assistant', 'tool:open_in_browser', 'assistant'])
+    assert.ok(!produced[0].content.includes('"name"')) // raw JSON hidden from the chat
+    assert.match(requests[0].messages[0].content, /Never claim you created/)
+    assert.ok(requests[0].tools.some((t) => t.function.name === 'open_in_browser'))
+  } finally {
+    server.close()
+  }
+})
