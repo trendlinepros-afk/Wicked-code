@@ -2,7 +2,7 @@
 
 ## Shipping changes (always do this)
 - Push every finished change to **`main`** (the owner wants all updates, builds and workflows pushed there so the in-app "Check for updates" button sees them).
-- **Bump `version` in `package.json`** for every change you push to `main` (patch for fixes, minor for features). The Release workflow (`.github/workflows/release.yml`) only publishes when the version is new; it tests, builds Windows/macOS/Linux installers and publishes a GitHub Release, which installed apps update from.
+- **Bump `version` in `package.json`** for every app change you push to `main` (patch for fixes, minor for features); docs-only changes don't need a bump. The Release workflow (`.github/workflows/release.yml`) only publishes when the version is new; it tests, builds Windows/macOS/Linux installers and publishes a GitHub Release, which installed apps update from.
 - After pushing, check the Release workflow run succeeds and report the installer link:
   `https://github.com/trendlinepros-afk/Wicked-code/releases/latest/download/Wicked-Code-Setup.exe`
 - Keep the Windows artifact name `Wicked-Code-Setup.exe` (no version) so that link stays stable.

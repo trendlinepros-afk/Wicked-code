@@ -13,7 +13,21 @@ A simplified, local-first take on the Claude Code desktop app. It has two worksp
   └── .sessions/          full session data (hidden from Obsidian)
   ```
 - **Chat.** A general assistant. Use **Add folder** to give the model read-only access to folders (it can list, read and search files).
-- **Code.** An agentic coding session. Each session starts by choosing the project's **working folder**. The agent can list, read and search files, edit and write files, and run shell commands, all inside that folder. Edits show as diffs, and you approve changes and commands. You can set the approval level in Settings → General.
+- **Code.** An agentic coding session. Each session starts from a **local working folder** or a **GitHub repository**. The agent works in a **build → run → test → fix loop**:
+  - reads, searches, edits and writes files (sandboxed to the folder)
+  - runs commands and tests (`run_command`)
+  - launches servers and apps in the background (`start_process`), reads their logs and stops them
+  - tests what it built with `http_request` (local servers) and `browser_check` (a real headless browser that reports page text, console errors and failed requests, and can run a script such as clicking a button)
+  - reads failures, fixes the code and re-runs until it passes; long loops are kept inside the model's context window automatically
+
+  Edits show as diffs. You approve changes and commands, or click **Allow all for this session**. Approval level and max agent steps are in Settings → General.
+- **GitHub (like Claude Code).** Connect a fine-grained token in Settings → GitHub. In **Code → New code session → GitHub repository**:
+  1. Pick a repository and base branch.
+  2. Wicked Code clones it and works on a new branch.
+  3. The agent can commit, push and open pull requests. Use the **Commit, push & open PR** shortcut, or just ask.
+
+  Git is authenticated through environment variables, so the token is never written to disk. Requires git.
+- **Ollama starts with the app.** If Ollama isn't running, Wicked Code launches `ollama serve` and stops it again on exit (only if it started it). Both are toggles in Settings → General.
 - **Model load/unload + VRAM meter** in the top bar. The meter shows used vs. available VRAM: NVIDIA via `nvidia-smi`, AMD via `rocm-smi`, Apple Silicon via unified memory.
 - **Automatic model lifecycle:**
   - The selected local model loads as soon as you start typing.
@@ -56,16 +70,21 @@ Build an installer:
 npm run dist:win     # or dist:mac / dist:linux → ./release
 ```
 
+### Download
+
+**Windows installer (always the latest):** https://github.com/trendlinepros-afk/Wicked-code/releases/latest/download/Wicked-Code-Setup.exe
+
+The macOS (`.dmg`) and Linux (`.AppImage`) builds are on the [Releases page](https://github.com/trendlinepros-afk/Wicked-code/releases/latest).
+
 ### Publishing updates
 
-Updates are served from this repo's GitHub Releases by `electron-updater`. To ship a new version:
+Updates are served from this repo's GitHub Releases by `electron-updater`. Every push to `main` runs the **Release** workflow:
+1. It tests and builds the app.
+2. If the `version` in `package.json` hasn't been released yet, it builds Windows, macOS and Linux installers and publishes them as a release.
 
-```bash
-npm version patch          # bumps package.json version and creates a vX.Y.Z tag
-git push --follow-tags     # the Release workflow builds Windows/macOS/Linux installers and publishes them
-```
+To ship, bump the version (`npm version patch --no-git-tag-version`) and push to `main`. Installed copies get the update from **Check for updates**. Settings are kept across updates.
 
-Installed copies will see the new version when you click **Check for updates**. Notes:
+Notes:
 - The repository must be **public**, or the app can't download private release assets.
 - macOS auto-update requires the app to be code-signed.
 - In dev mode (`npm run dev`) the button reports that updates only work in the installed app.
