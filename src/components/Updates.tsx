@@ -95,6 +95,56 @@ export function UpdatesCard() {
   )
 }
 
+/** Compact "Check for updates" button for the bottom of the sidebar. */
+export function SidebarUpdateButton() {
+  const { update } = useApp()
+  const status = update?.status ?? 'idle'
+  const [justChecked, setJustChecked] = useState(false)
+
+  // Show results briefly, then fall back to the plain button.
+  useEffect(() => {
+    if (!justChecked || !['none', 'error', 'unsupported'].includes(status)) return
+    const t = setTimeout(() => setJustChecked(false), 6000)
+    return () => clearTimeout(t)
+  }, [justChecked, status])
+
+  let label: ReactNode = (
+    <>
+      <Icon name="refresh" size={14} /> Check for updates
+    </>
+  )
+  let cls = ''
+  let title = 'Check GitHub for a newer version of Wicked Code'
+  if (status === 'checking') label = <><Spinner /> Checking for updates…</>
+  else if (status === 'downloading') label = <><Spinner /> Downloading update… {update?.percent ?? 0}%</>
+  else if (status === 'downloaded') {
+    label = <><Icon name="download" size={14} /> Update v{update?.version} ready — install</>
+    cls = 'ready'
+  } else if (justChecked && status === 'none') {
+    label = <><Icon name="check" size={14} /> You’re up to date</>
+    cls = 'ok'
+  } else if (justChecked && (status === 'error' || status === 'unsupported')) {
+    label = <>Update check failed</>
+    cls = 'bad'
+    title = update?.error || ''
+  }
+
+  return (
+    <button
+      className={`sidebar-update ${cls}`}
+      title={title}
+      disabled={status === 'checking' || status === 'downloading'}
+      onClick={() => {
+        if (status === 'downloaded') return window.dispatchEvent(new Event('wicked:show-update'))
+        setJustChecked(true)
+        api().updater.check()
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
 /** Thin bar along the bottom of the window: version on the far left, status on the right. */
 export function StatusBar() {
   const { appInfo, update, settings, ollamaRunning } = useApp()

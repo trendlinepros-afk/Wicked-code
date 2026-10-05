@@ -5,6 +5,7 @@ import { MessageList, ToolArgs, EmptyIcon } from './Messages'
 import { ModelPicker } from './ModelPicker'
 import { ConfirmDialog, Icon, basename } from './ui'
 import { NewCodeSessionDialog } from './NewCodeSession'
+import { SidebarUpdateButton } from './Updates'
 
 interface RunState {
   runId: string
@@ -329,6 +330,9 @@ export function Workspace({
               </button>
             </div>
           ))}
+        </div>
+        <div className="sidebar-foot">
+          <SidebarUpdateButton />
         </div>
       </aside>
 
