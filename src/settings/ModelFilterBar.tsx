@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/ui'
+import { RangeSlider, formatGBRange } from './RangeSlider'
 import { DEFAULT_FILTER, SORT_LABELS, activeCount, type ModelFilter, type SortKey, type Source } from '../lib/modelFilter'
 
 const RELEASE_OPTIONS = [
@@ -9,6 +10,22 @@ const RELEASE_OPTIONS = [
   { v: 12, label: 'Last year' },
   { v: 24, label: 'Last 2 years' },
 ]
+
+const VRAM_PRESETS: { label: string; min: number | null; max: number | null }[] = [
+  { label: 'Tiny ≤4 GB', min: null, max: 4 },
+  { label: 'Small 4–8 GB', min: 4, max: 8 },
+  { label: 'Medium 8–16 GB', min: 8, max: 16 },
+  { label: 'Large 16–32 GB', min: 16, max: 32 },
+  { label: 'Huge 32 GB+', min: 32, max: null },
+]
+
+/** "5–10 GB", "≤ 8 GB", "≥ 16 GB" or "Any". */
+function vramRangeLabel(lo: number | null, hi: number | null): string {
+  if (lo == null && hi == null) return 'Any'
+  if (lo == null) return `≤ ${formatGBRange(hi!)}`
+  if (hi == null) return `≥ ${formatGBRange(lo)}`
+  return `${formatGBRange(lo).replace(' GB', '')}–${formatGBRange(hi)}`
+}
 
 const STAR_OPTIONS = [
   { v: 0, label: 'Any' },
@@ -59,7 +76,9 @@ export function ModelFilterBar({
   const chips: { key: string; label: string; clear(): void }[] = []
   if (filter.sort !== 'recommended') chips.push({ key: 'sort', label: `Sort: ${SORT_LABELS[filter.sort]}`, clear: () => set({ sort: 'recommended' }) })
   if (filter.source !== 'all') chips.push({ key: 'src', label: filter.source === 'downloaded' ? 'Downloaded only' : 'Store only', clear: () => set({ source: 'all' }) })
-  if (filter.maxVramGB != null) chips.push({ key: 'max', label: `≤ ${filter.maxVramGB} GB VRAM`, clear: () => set({ maxVramGB: null }) })
+  if (filter.minVramGB != null || filter.maxVramGB != null) {
+    chips.push({ key: 'vram', label: `${vramRangeLabel(filter.minVramGB, filter.maxVramGB)} VRAM`, clear: () => set({ minVramGB: null, maxVramGB: null }) })
+  }
   if (filter.fitsOnly) chips.push({ key: 'fits', label: `Fits my GPU (${gpuVramGB.toFixed(0)} GB)`, clear: () => set({ fitsOnly: false }) })
   if (filter.minStars > 0) chips.push({ key: 'stars', label: `${filter.minStars}★${filter.minStars < 5 ? '+' : ''} rating`, clear: () => set({ minStars: 0 }) })
   if (filter.hideWontRun) chips.push({ key: 'wont', label: 'Hide won’t run', clear: () => set({ hideWontRun: false }) })
@@ -69,7 +88,6 @@ export function ModelFilterBar({
   }
   for (const t of filter.tags) chips.push({ key: 't-' + t, label: t, clear: () => toggleTag(t) })
 
-  const sliderValue = filter.maxVramGB ?? maxVramScale
 
   return (
     <div className="mf">
@@ -104,25 +122,29 @@ export function ModelFilterBar({
 
               <div className="mf-group">
                 <label>
-                  Max VRAM <span className="mf-value">{filter.maxVramGB == null ? 'Any' : `${filter.maxVramGB} GB`}</span>
+                  VRAM range <span className="mf-value">{vramRangeLabel(filter.minVramGB, filter.maxVramGB)}</span>
                 </label>
-                <input
-                  type="range"
-                  min={2}
+                <RangeSlider
+                  min={0}
                   max={maxVramScale}
-                  step={1}
-                  value={sliderValue}
-                  onChange={(e) => {
-                    const v = Number(e.target.value)
-                    set({ maxVramGB: v >= maxVramScale ? null : v })
-                  }}
+                  low={filter.minVramGB}
+                  high={filter.maxVramGB}
+                  marker={gpuVramGB > 0 ? { gb: gpuVramGB, label: `Your GPU ${gpuVramGB.toFixed(0)} GB` } : undefined}
+                  onChange={(lo, hi) => set({ minVramGB: lo, maxVramGB: hi })}
                 />
                 <div className="mf-presets">
-                  {[4, 8, 12, 16, 24, 32].filter((v) => v < maxVramScale).map((v) => (
-                    <button key={v} className={filter.maxVramGB === v ? 'active' : ''} onClick={() => set({ maxVramGB: filter.maxVramGB === v ? null : v })}>
-                      ≤{v} GB
-                    </button>
-                  ))}
+                  {VRAM_PRESETS.map((p) => {
+                    const active = filter.minVramGB === p.min && filter.maxVramGB === p.max
+                    return (
+                      <button
+                        key={p.label}
+                        className={active ? 'active' : ''}
+                        onClick={() => set(active ? { minVramGB: null, maxVramGB: null } : { minVramGB: p.min, maxVramGB: p.max })}
+                      >
+                        {p.label}
+                      </button>
+                    )
+                  })}
                 </div>
                 {gpuVramGB > 0 && (
                   <label className="check">

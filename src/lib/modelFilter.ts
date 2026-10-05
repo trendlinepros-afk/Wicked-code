@@ -7,7 +7,8 @@ export interface ModelFilter {
   query: string
   sort: SortKey
   source: Source
-  maxVramGB: number | null // null = no limit
+  minVramGB: number | null // null = no lower limit
+  maxVramGB: number | null // null = no upper limit
   fitsOnly: boolean // must fit fully in this GPU's VRAM
   minStars: number // 0 = any
   hideWontRun: boolean
@@ -19,6 +20,7 @@ export const DEFAULT_FILTER: ModelFilter = {
   query: '',
   sort: 'recommended',
   source: 'all',
+  minVramGB: null,
   maxVramGB: null,
   fitsOnly: false,
   minStars: 0,
@@ -68,6 +70,7 @@ export function matches(f: ModelFilter, m: ModelFacts, gpuVramGB: number): boole
     const q = f.query.toLowerCase()
     if (!`${m.name} ${m.display} ${m.tags.join(' ')} ${m.text}`.toLowerCase().includes(q)) return false
   }
+  if (f.minVramGB != null && m.vramGB < f.minVramGB) return false
   if (f.maxVramGB != null && m.vramGB > f.maxVramGB) return false
   if (f.fitsOnly && gpuVramGB > 0 && m.vramGB > gpuVramGB) return false
   if (f.minStars > 0 && m.stars < f.minStars) return false
@@ -109,7 +112,7 @@ export function activeCount(f: ModelFilter): number {
   let n = 0
   if (f.sort !== DEFAULT_FILTER.sort) n++
   if (f.source !== 'all') n++
-  if (f.maxVramGB != null) n++
+  if (f.minVramGB != null || f.maxVramGB != null) n++
   if (f.fitsOnly) n++
   if (f.minStars > 0) n++
   if (f.hideWontRun) n++

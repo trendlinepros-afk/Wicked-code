@@ -83,20 +83,20 @@ export function LocalModels() {
   ]
   const favShown = finish(favAll.filter((e) => (e.installed ? showDownloaded : showStore)))
 
-  const downloadedAll: Entry[] = localModels
-    .filter((m) => !isFav(m.name))
-    .map((m, i) => ({ facts: installedFacts(m), installed: true, node: () => installedCard(m), order: i }))
+  // Favorites are copies: starred models also stay in their normal section.
+  const downloadedAll: Entry[] = localModels.map((m, i) => ({ facts: installedFacts(m), installed: true, node: () => installedCard(m), order: i }))
   const downloadedShown = showDownloaded ? finish(downloadedAll) : []
 
   // Store default order: featured first, then best fit for this machine.
-  const storeAll: Entry[] = CATALOG.filter((m) => !isInstalled(localModels, m.name) && !isFav(m.name))
+  const storeAll: Entry[] = CATALOG.filter((m) => !isInstalled(localModels, m.name))
     .map((m) => ({ facts: storeFacts(m), installed: false, node: () => storeCard(m), order: 0, featured: !!m.featured }))
     .sort((a, b) => Number(b.featured) - Number(a.featured) || b.facts.stars - a.facts.stars || b.facts.vramGB - a.facts.vramGB)
     .map((e, i) => ({ ...e, order: i }))
   const storeShown = showStore ? finish(storeAll) : []
 
-  const totalModels = favAll.length + downloadedAll.length + storeAll.length
-  const shownModels = favShown.length + downloadedShown.length + storeShown.length
+  // Count distinct models (favorites are duplicates of cards below).
+  const totalModels = downloadedAll.length + storeAll.length
+  const shownModels = downloadedShown.length + storeShown.length
   const filtering = shownModels < totalModels
   const allTags = useMemo(
     () => Array.from(new Set([...CATALOG.flatMap((m) => m.tags), ...localModels.flatMap((m) => installedFacts(m).tags)])).sort(),
@@ -266,7 +266,6 @@ export function LocalModels() {
             Downloaded models <span className="count">{downloadedShown.length}</span>
           </h3>
           {ollamaRunning && !localModels.length && <div className="muted pad">No models downloaded yet. Pick one from the store below.</div>}
-          {ollamaRunning && !!localModels.length && !downloadedAll.length && <div className="muted pad">All your downloaded models are in Favorites.</div>}
           {!!downloadedAll.length && !downloadedShown.length && <div className="muted pad">No downloaded models match your filters.</div>}
         </>
       )}
@@ -423,6 +422,12 @@ function Notes({ name, initial }: { name: string; initial: string }) {
   const [text, setText] = useState(initial)
   const [saved, setSaved] = useState(true)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const editing = useRef(false)
+
+  // The same model can be shown twice (Favorites + its section): pick up edits made in the other copy.
+  useEffect(() => {
+    if (!editing.current) setText(initial)
+  }, [initial])
 
   const save = async (v: string) => {
     clearTimeout(timer.current)
@@ -448,7 +453,11 @@ function Notes({ name, initial }: { name: string; initial: string }) {
           clearTimeout(timer.current)
           timer.current = setTimeout(() => save(v), 700)
         }}
-        onBlur={() => !saved && save(text)}
+        onFocus={() => (editing.current = true)}
+        onBlur={() => {
+          editing.current = false
+          if (!saved) save(text)
+        }}
       />
     </div>
   )
