@@ -6,6 +6,7 @@ export interface CatalogModel {
   display: string
   sizeGB: number // download size
   vramGB: number // memory needed to run fully on GPU
+  released: string // YYYY-MM the model was released
   tags: string[]
   strengths: string
   weaknesses: string
@@ -15,6 +16,7 @@ export interface CatalogModel {
 export const CATALOG: CatalogModel[] = [
   {
     name: 'qwen3.8:27b',
+    released: '2026-08',
     display: 'Qwen 3.8 27B',
     sizeGB: 18,
     vramGB: 21,
@@ -25,6 +27,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'qwen3.6:27b',
+    released: '2026-04',
     display: 'Qwen 3.6 27B',
     sizeGB: 17,
     vramGB: 20,
@@ -34,6 +37,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'qwen3-coder:30b',
+    released: '2025-07',
     display: 'Qwen3 Coder 30B (MoE)',
     sizeGB: 19,
     vramGB: 21,
@@ -43,6 +47,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'qwen3:32b',
+    released: '2025-04',
     display: 'Qwen3 32B',
     sizeGB: 20,
     vramGB: 23,
@@ -52,6 +57,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'qwen3:14b',
+    released: '2025-04',
     display: 'Qwen3 14B',
     sizeGB: 9.3,
     vramGB: 11,
@@ -61,6 +67,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'qwen3:8b',
+    released: '2025-04',
     display: 'Qwen3 8B',
     sizeGB: 5.2,
     vramGB: 6.5,
@@ -70,6 +77,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'qwen3:4b',
+    released: '2025-04',
     display: 'Qwen3 4B',
     sizeGB: 2.5,
     vramGB: 3.5,
@@ -79,6 +87,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'qwen2.5-coder:32b',
+    released: '2024-11',
     display: 'Qwen2.5 Coder 32B',
     sizeGB: 20,
     vramGB: 23,
@@ -88,6 +97,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'qwen2.5-coder:7b',
+    released: '2024-09',
     display: 'Qwen2.5 Coder 7B',
     sizeGB: 4.7,
     vramGB: 6,
@@ -97,6 +107,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'devstral:24b',
+    released: '2025-05',
     display: 'Devstral 24B',
     sizeGB: 14,
     vramGB: 16,
@@ -106,6 +117,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'gpt-oss:20b',
+    released: '2025-08',
     display: 'gpt-oss 20B',
     sizeGB: 14,
     vramGB: 16,
@@ -115,6 +127,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'gpt-oss:120b',
+    released: '2025-08',
     display: 'gpt-oss 120B',
     sizeGB: 65,
     vramGB: 70,
@@ -124,6 +137,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'gemma3:27b',
+    released: '2025-03',
     display: 'Gemma 3 27B',
     sizeGB: 17,
     vramGB: 20,
@@ -133,6 +147,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'gemma3:12b',
+    released: '2025-03',
     display: 'Gemma 3 12B',
     sizeGB: 8.1,
     vramGB: 10,
@@ -142,6 +157,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'gemma3:4b',
+    released: '2025-03',
     display: 'Gemma 3 4B',
     sizeGB: 3.3,
     vramGB: 4.5,
@@ -151,6 +167,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'llama3.3:70b',
+    released: '2024-12',
     display: 'Llama 3.3 70B',
     sizeGB: 43,
     vramGB: 48,
@@ -160,6 +177,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'llama3.1:8b',
+    released: '2024-07',
     display: 'Llama 3.1 8B',
     sizeGB: 4.9,
     vramGB: 6.5,
@@ -169,6 +187,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'llama3.2:3b',
+    released: '2024-09',
     display: 'Llama 3.2 3B',
     sizeGB: 2.0,
     vramGB: 3,
@@ -178,6 +197,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'deepseek-r1:32b',
+    released: '2025-01',
     display: 'DeepSeek R1 32B (distill)',
     sizeGB: 20,
     vramGB: 23,
@@ -187,6 +207,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'deepseek-r1:14b',
+    released: '2025-01',
     display: 'DeepSeek R1 14B (distill)',
     sizeGB: 9.0,
     vramGB: 11,
@@ -196,6 +217,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'deepseek-r1:8b',
+    released: '2025-05',
     display: 'DeepSeek R1 8B (distill)',
     sizeGB: 5.2,
     vramGB: 6.5,
@@ -205,6 +227,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'mistral-small3.2:24b',
+    released: '2025-06',
     display: 'Mistral Small 3.2 24B',
     sizeGB: 15,
     vramGB: 17,
@@ -214,6 +237,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'mistral:7b',
+    released: '2024-05',
     display: 'Mistral 7B',
     sizeGB: 4.1,
     vramGB: 5.5,
@@ -223,6 +247,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'phi4:14b',
+    released: '2024-12',
     display: 'Phi-4 14B',
     sizeGB: 9.1,
     vramGB: 11,
@@ -232,6 +257,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'phi4-mini:3.8b',
+    released: '2025-02',
     display: 'Phi-4 Mini 3.8B',
     sizeGB: 2.5,
     vramGB: 3.5,
@@ -246,6 +272,14 @@ const BY_NAME = new Map(CATALOG.map((m) => [m.name, m]))
 /** Find catalog info for an installed model (exact tag, or ":latest" alias). */
 export function catalogInfo(name: string): CatalogModel | undefined {
   return BY_NAME.get(name) ?? BY_NAME.get(name.replace(/:latest$/, ''))
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** "2026-08" → "Aug 2026" */
+export function formatReleased(yyyymm: string): string {
+  const [y, m] = yyyymm.split('-').map(Number)
+  return `${MONTHS[m - 1]} ${y}`
 }
 
 /** Estimate the VRAM an installed model needs from its file size. */

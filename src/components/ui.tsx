@@ -98,6 +98,9 @@ const paths: Record<string, string> = {
   github: 'M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9',
   play: 'M7 4l13 8-13 8z',
   external: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5',
+  filter: 'M3 5h18l-7 8v6l-4 2v-8z',
+  calendar: 'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4',
   sliders: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4',
 }
 

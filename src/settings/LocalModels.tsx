@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, type LocalModel, type PullProgress } from '../lib/api'
-import { CATALOG, catalogInfo, estimateVramGB, type CatalogModel } from '../lib/catalog'
+import { CATALOG, catalogInfo, estimateVramGB, formatReleased, type CatalogModel } from '../lib/catalog'
 import { rateModel } from '../lib/rating'
 import { useApp } from '../lib/store'
+import { ModelFilterBar } from './ModelFilterBar'
+import { comparator, inferTags, loadFilter, matches, saveFilter, type ModelFacts, type ModelFilter } from '../lib/modelFilter'
 import { ConfirmDialog, Icon, Spinner, Stars, formatGB } from '../components/ui'
 
 type Confirm = { kind: 'delete'; name: string } | { kind: 'download'; name: string; sizeGB?: number } | null
@@ -12,9 +14,11 @@ const isInstalled = (models: LocalModel[], name: string) => models.some((m) => m
 export function LocalModels() {
   const { localModels, ollamaRunning, gpu, pulls, startPull, refreshModels, settings, setSettings, selectModel, modelState } = useApp()
   const [confirm, setConfirm] = useState<Confirm>(null)
-  const [query, setQuery] = useState('')
-  const [tag, setTag] = useState('all')
-  const [sort, setSort] = useState<'fit' | 'size' | 'name'>('fit')
+  const [filter, setFilterState] = useState<ModelFilter>(loadFilter)
+  const setFilter = (f: ModelFilter) => {
+    setFilterState(f)
+    saveFilter(f)
+  }
   const [custom, setCustom] = useState('')
   const [error, setError] = useState<string | null>(null)
 
@@ -25,37 +29,80 @@ export function LocalModels() {
   const favorites = settings.favoriteModels ?? []
   const isFav = (name: string) => favorites.some((f) => f === name || f === `${name}:latest` || `${f}:latest` === name)
 
-  const store = useMemo(() => {
-    const q = query.toLowerCase()
-    const list = CATALOG.filter((m) => !isInstalled(localModels, m.name) && !isFav(m.name))
-      .filter((m) => tag === 'all' || m.tags.includes(tag))
-      .filter((m) => !q || `${m.name} ${m.display} ${m.strengths} ${m.tags.join(' ')}`.toLowerCase().includes(q))
-    const stars = (m: CatalogModel) => rateModel(m.vramGB, gpu).stars
-    return list.sort((a, b) => {
-      if (a.featured !== b.featured) return a.featured ? -1 : 1
-      if (sort === 'name') return a.display.localeCompare(b.display)
-      if (sort === 'size') return a.vramGB - b.vramGB
-      return stars(b) - stars(a) || b.vramGB - a.vramGB
-    })
-  }, [localModels, query, tag, sort, gpu, favorites])
-
   const toggleFavorite = async (name: string) => {
     const next = isFav(name) ? favorites.filter((f) => f !== name && f !== `${name}:latest` && `${f}:latest` !== name) : [...favorites, name]
     setSettings((s) => ({ ...s, favoriteModels: next })) // instant feedback
     setSettings(await api().settings.set('favoriteModels', next))
   }
 
-  // Favorites hold installed models and/or store models, in the order they were starred.
-  const favInstalled = localModels.filter((m) => isFav(m.name))
-  const favStore = CATALOG.filter((m) => isFav(m.name) && !isInstalled(localModels, m.name))
-  const downloaded = localModels.filter((m) => !isFav(m.name))
-  const favOrder = (name: string) => favorites.findIndex((f) => f === name || f === `${name}:latest` || `${f}:latest` === name)
-  const favCards = [
-    ...favInstalled.map((m) => ({ key: m.name, order: favOrder(m.name), node: installedCard(m) })),
-    ...favStore.map((m) => ({ key: m.name, order: favOrder(m.name), node: storeCard(m) })),
-  ].sort((a, b) => a.order - b.order)
+  // ----- facts used for filtering/sorting -----
+  const gpuVramGB = gpu && gpu.totalMB > 0 ? gpu.totalMB / 1024 : 0
+  const installedFacts = (m: LocalModel): ModelFacts => {
+    const info = catalogInfo(m.name)
+    const vramGB = info?.vramGB ?? estimateVramGB(m.size)
+    return {
+      name: m.name,
+      display: info?.display ?? m.name,
+      vramGB,
+      sizeGB: m.size / 1024 ** 3,
+      stars: rateModel(vramGB, gpu).stars,
+      tags: info?.tags ?? inferTags(m.name, m.family, vramGB),
+      text: `${m.family} ${m.parameterSize} ${info?.strengths ?? ''} ${settings.modelNotes[m.name] ?? ''}`,
+      released: info?.released,
+    }
+  }
+  const storeFacts = (m: CatalogModel): ModelFacts => ({
+    name: m.name,
+    display: m.display,
+    vramGB: m.vramGB,
+    sizeGB: m.sizeGB,
+    stars: rateModel(m.vramGB, gpu).stars,
+    tags: m.tags,
+    text: `${m.strengths} ${m.weaknesses}`,
+    released: m.released,
+  })
+  const cmp = comparator(filter.sort)
+  type Entry = { facts: ModelFacts; installed: boolean; node: () => ReactNode; order: number }
+  const finish = (list: Entry[]) => {
+    const out = list.filter((e) => matches(filter, e.facts, gpuVramGB))
+    return cmp ? out.sort((a, b) => cmp(a.facts, b.facts)) : out.sort((a, b) => a.order - b.order)
+  }
+  const showDownloaded = filter.source !== 'store'
+  const showStore = filter.source !== 'downloaded'
 
-  const allTags = useMemo(() => ['all', ...Array.from(new Set(CATALOG.flatMap((m) => m.tags)))], [])
+  // Favorites hold installed models and/or store models, in the order they were starred.
+  const favOrder = (name: string) => favorites.findIndex((f) => f === name || f === `${name}:latest` || `${f}:latest` === name)
+  const favAll: Entry[] = [
+    ...localModels.filter((m) => isFav(m.name)).map((m) => ({ facts: installedFacts(m), installed: true, node: () => installedCard(m), order: favOrder(m.name) })),
+    ...CATALOG.filter((m) => isFav(m.name) && !isInstalled(localModels, m.name)).map((m) => ({
+      facts: storeFacts(m),
+      installed: false,
+      node: () => storeCard(m),
+      order: favOrder(m.name),
+    })),
+  ]
+  const favShown = finish(favAll.filter((e) => (e.installed ? showDownloaded : showStore)))
+
+  const downloadedAll: Entry[] = localModels
+    .filter((m) => !isFav(m.name))
+    .map((m, i) => ({ facts: installedFacts(m), installed: true, node: () => installedCard(m), order: i }))
+  const downloadedShown = showDownloaded ? finish(downloadedAll) : []
+
+  // Store default order: featured first, then best fit for this machine.
+  const storeAll: Entry[] = CATALOG.filter((m) => !isInstalled(localModels, m.name) && !isFav(m.name))
+    .map((m) => ({ facts: storeFacts(m), installed: false, node: () => storeCard(m), order: 0, featured: !!m.featured }))
+    .sort((a, b) => Number(b.featured) - Number(a.featured) || b.facts.stars - a.facts.stars || b.facts.vramGB - a.facts.vramGB)
+    .map((e, i) => ({ ...e, order: i }))
+  const storeShown = showStore ? finish(storeAll) : []
+
+  const totalModels = favAll.length + downloadedAll.length + storeAll.length
+  const shownModels = favShown.length + downloadedShown.length + storeShown.length
+  const filtering = shownModels < totalModels
+  const allTags = useMemo(
+    () => Array.from(new Set([...CATALOG.flatMap((m) => m.tags), ...localModels.flatMap((m) => installedFacts(m).tags)])).sort(),
+    [localModels],
+  )
+  const maxVramScale = Math.max(32, Math.ceil(Math.max(...CATALOG.map((m) => m.vramGB), ...downloadedAll.map((e) => e.facts.vramGB), 0) / 8) * 8)
 
   const doConfirm = async () => {
     const c = confirm
@@ -102,6 +149,7 @@ export function LocalModels() {
             <span>{formatGB(m.size)} on disk</span>
             {m.parameterSize && <span>{m.parameterSize}</span>}
             {m.quantization && <span>{m.quantization}</span>}
+            {info?.released && <ReleasedChip released={info.released} />}
           </div>
           <ModelBlurb info={info} fallback={`${m.family || 'Custom'} model${m.parameterSize ? ` with ${m.parameterSize} parameters` : ''}. Not in the Wicked Code catalog, so strengths are unknown.`} />
           <div className="muted small fit-detail">{r.detail}</div>
@@ -149,6 +197,7 @@ export function LocalModels() {
                 {t}
               </span>
             ))}
+            <ReleasedChip released={m.released} />
           </div>
           <ModelBlurb info={m} />
           <div className="muted small fit-detail">{r.detail}</div>
@@ -188,48 +237,52 @@ export function LocalModels() {
       )}
       {error && <div className="callout error">{error}</div>}
 
+      <ModelFilterBar
+        filter={filter}
+        onChange={setFilter}
+        tags={allTags}
+        gpuVramGB={gpuVramGB}
+        maxVramScale={maxVramScale}
+        shown={shownModels}
+        total={totalModels}
+      />
+
       <h3 className="section-title">
-        <span className="fav-title-star">★</span> Favorites <span className="count">{favCards.length}</span>
+        <span className="fav-title-star">★</span> Favorites <span className="count">{favShown.length}</span>
       </h3>
-      {favCards.length ? (
-        <div className="model-grid">{favCards.map((c) => c.node)}</div>
+      {favShown.length ? (
+        <div className="model-grid">{favShown.map((e) => e.node())}</div>
+      ) : favAll.length ? (
+        <div className="fav-empty muted small">No favorites match your filters.</div>
       ) : (
         <div className="fav-empty muted small">
           Click the <span className="fav-inline">☆</span> in the top-right corner of any model to pin it here.
         </div>
       )}
 
-      <h3 className="section-title">
-        Downloaded models <span className="count">{downloaded.length}</span>
-      </h3>
-      {ollamaRunning && !localModels.length && <div className="muted pad">No models downloaded yet. Pick one from the store below.</div>}
-      {ollamaRunning && !!localModels.length && !downloaded.length && <div className="muted pad">All your downloaded models are in Favorites.</div>}
+      {showDownloaded && (
+        <>
+          <h3 className="section-title">
+            Downloaded models <span className="count">{downloadedShown.length}</span>
+          </h3>
+          {ollamaRunning && !localModels.length && <div className="muted pad">No models downloaded yet. Pick one from the store below.</div>}
+          {ollamaRunning && !!localModels.length && !downloadedAll.length && <div className="muted pad">All your downloaded models are in Favorites.</div>}
+          {!!downloadedAll.length && !downloadedShown.length && <div className="muted pad">No downloaded models match your filters.</div>}
+        </>
+      )}
       <div className="model-grid">
-        {downloaded.map((m) => installedCard(m))}
+        {downloadedShown.map((e) => e.node())}
       </div>
 
-      <h3 className="section-title store-title">
-        Model store <span className="count">{store.length}</span>
-      </h3>
-      <div className="store-controls">
-        <input className="input" placeholder="Search models…" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <select className="input narrow" value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
-          <option value="fit">Best for my system</option>
-          <option value="size">Smallest first</option>
-          <option value="name">Name</option>
-        </select>
-      </div>
-      <div className="tag-filter">
-        {allTags.map((t) => (
-          <button key={t} className={tag === t ? 'active' : ''} onClick={() => setTag(t)}>
-            {t}
-          </button>
-        ))}
-      </div>
-      <div className="model-grid">
-        {store.map((m) => storeCard(m))}
-      </div>
-      {!store.length && <div className="muted pad">No store models match.</div>}
+      {showStore && (
+        <>
+          <h3 className="section-title store-title">
+            Model store <span className="count">{storeShown.length}</span>
+          </h3>
+          <div className="model-grid">{storeShown.map((e) => e.node())}</div>
+          {!storeShown.length && <div className="muted pad">{filtering ? 'No store models match your filters.' : 'You have every catalog model.'}</div>}
+        </>
+      )}
 
       <section className="card custom-pull">
         <h3>Download another model</h3>
@@ -287,6 +340,14 @@ export function LocalModels() {
         />
       )}
     </div>
+  )
+}
+
+function ReleasedChip({ released }: { released: string }) {
+  return (
+    <span className="released" title={`Released ${formatReleased(released)}`}>
+      <Icon name="calendar" size={12} /> {formatReleased(released)}
+    </span>
   )
 }
 
