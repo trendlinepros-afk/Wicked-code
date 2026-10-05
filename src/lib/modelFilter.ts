@@ -14,6 +14,7 @@ export interface ModelFilter {
   hideWontRun: boolean
   tags: string[] // model must have every selected tag
   releasedWithinMonths: number | null // null = any release date
+  bestForYou: boolean // only models that run fully on the GPU with what's free right now
 }
 
 export const DEFAULT_FILTER: ModelFilter = {
@@ -27,6 +28,7 @@ export const DEFAULT_FILTER: ModelFilter = {
   hideWontRun: false,
   tags: [],
   releasedWithinMonths: null,
+  bestForYou: false,
 }
 
 export const SORT_LABELS: Record<SortKey, string> = {
@@ -49,6 +51,7 @@ export interface ModelFacts {
   tags: string[]
   text: string // searchable text (descriptions etc.)
   released?: string // YYYY-MM when known
+  fitsNow: boolean // fits fully in the VRAM free right now
 }
 
 /** Guess capability tags for models that aren't in the catalog, from their name/family. */
@@ -66,6 +69,7 @@ export function inferTags(name: string, family: string, vramGB: number): string[
 }
 
 export function matches(f: ModelFilter, m: ModelFacts, gpuVramGB: number): boolean {
+  if (f.bestForYou && !m.fitsNow) return false
   if (f.query) {
     const q = f.query.toLowerCase()
     if (!`${m.name} ${m.display} ${m.tags.join(' ')} ${m.text}`.toLowerCase().includes(q)) return false
@@ -106,6 +110,10 @@ export function comparator(sort: SortKey): ((a: ModelFacts, b: ModelFacts) => nu
       return null
   }
 }
+
+/** "Best for you" order: the most capable (largest) model that still fits comes first, then newest. */
+export const bestForYouOrder = (a: ModelFacts, b: ModelFacts) =>
+  b.vramGB - a.vramGB || (b.released ?? '').localeCompare(a.released ?? '') || a.name.localeCompare(b.name)
 
 /** Number of filters that differ from the defaults (shown as a badge on the Filter button). */
 export function activeCount(f: ModelFilter): number {

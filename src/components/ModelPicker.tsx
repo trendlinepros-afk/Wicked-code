@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { parseModelId, PROVIDER_LABELS, type CloudProvider } from '../lib/api'
-import { catalogInfo, estimateVramGB } from '../lib/catalog'
+import { vramNeededGB } from '../lib/catalog'
 import { rateModel } from '../lib/rating'
 import { useApp } from '../lib/store'
 import { Icon, Stars, formatGB } from './ui'
@@ -61,7 +61,7 @@ export function ModelPicker({ disabled, onManage }: { disabled?: boolean; onMana
             {ollamaRunning && !locals.length && <div className="model-menu-empty">No local models found.</div>}
             {locals.map((m) => {
               const id = `ollama:${m.name}`
-              const need = catalogInfo(m.name)?.vramGB ?? estimateVramGB(m.size)
+              const need = vramNeededGB(m.name, settings.contextLength, m)
               return (
                 <button key={id} className={`model-menu-item ${id === current ? 'selected' : ''}`} onClick={() => choose(id)}>
                   <span className="model-menu-item-name">

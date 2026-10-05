@@ -140,7 +140,7 @@ function registerIpc() {
   handle('settings:set', (key, value) => {
     const allowed = [
       'ollamaUrl', 'idleUnloadSeconds', 'permissionMode', 'useVaultMemory', 'contextLength', 'theme',
-      'maxAgentSteps', 'autoStartOllama', 'stopOllamaOnExit', 'cloneRoot', 'favoriteModels',
+      'maxAgentSteps', 'autoLoadOnType', 'autoStartOllama', 'stopOllamaOnExit', 'cloneRoot', 'favoriteModels',
     ]
     if (!allowed.includes(key)) throw new Error('Setting not editable: ' + key)
     config.set(key, value)
@@ -239,9 +239,9 @@ function registerIpc() {
 
   // ----- active model lifecycle -----
   handle('model:state', () => models.state())
-  handle('model:set', async (id) => {
+  handle('model:set', async (id, opts) => {
     config.set('selectedModel', id)
-    await models.setModel(id)
+    await models.setModel(id, { load: opts?.load !== false })
     return models.state()
   })
   handle('model:load', async () => {
@@ -253,7 +253,11 @@ function registerIpc() {
     await models.unload()
     return models.state()
   })
-  handle('model:touch', () => models.touch())
+  handle('model:touch', () => {
+    // Typing counts as activity (resets the idle timer); it only loads the model if that setting is on.
+    if (config.get('autoLoadOnType') === false) models.lastActivity = Date.now()
+    else models.touch()
+  })
 
   handle('gpu:stats', async () => {
     const stats = await getGpuStats(() => ollama.ps())
@@ -308,6 +312,7 @@ function registerIpc() {
         apiKey: provider === 'ollama' ? null : config.getApiKey(provider),
         ollama,
         numCtx: Number(config.get('contextLength')) || 0,
+        keepAlive: models.keepAlive(),
         permissionMode: config.get('permissionMode'),
         signal: ac.signal,
         emit,
@@ -356,7 +361,10 @@ app.whenReady().then(() => {
   vault = new Vault(() => config.get('vaultPath'))
   models = new ModelManager({
     ollama,
-    idleSeconds: () => Number(config.get('idleUnloadSeconds')) || 30,
+    idleSeconds: () => {
+      const v = Number(config.get('idleUnloadSeconds'))
+      return Number.isFinite(v) && v >= 0 ? v : 30 // 0 = never
+    },
     initialModel: config.get('selectedModel'),
   })
   models.on('state', (s) => send('model:state', s))

@@ -7,6 +7,8 @@ export interface CatalogModel {
   sizeGB: number // download size
   vramGB: number // memory needed to run fully on GPU
   released: string // YYYY-MM the model was released
+  /** Override for context (KV cache) memory in GB per 1K tokens, for models with unusual attention. */
+  kvPer1K?: number
   tags: string[]
   strengths: string
   weaknesses: string
@@ -16,6 +18,7 @@ export interface CatalogModel {
 export const CATALOG: CatalogModel[] = [
   {
     name: 'qwen3.8:27b',
+    kvPer1K: 0.05, // hybrid linear attention: small KV cache
     released: '2026-08',
     display: 'Qwen 3.8 27B',
     sizeGB: 18,
@@ -27,6 +30,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'qwen3.6:27b',
+    kvPer1K: 0.05, // hybrid linear attention: small KV cache
     released: '2026-04',
     display: 'Qwen 3.6 27B',
     sizeGB: 17,
@@ -37,6 +41,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'qwen3-coder:30b',
+    kvPer1K: 0.1, // MoE with few KV heads
     released: '2025-07',
     display: 'Qwen3 Coder 30B (MoE)',
     sizeGB: 19,
@@ -117,6 +122,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'gpt-oss:20b',
+    kvPer1K: 0.1, // MoE with few KV heads
     released: '2025-08',
     display: 'gpt-oss 20B',
     sizeGB: 14,
@@ -127,6 +133,7 @@ export const CATALOG: CatalogModel[] = [
   },
   {
     name: 'gpt-oss:120b',
+    kvPer1K: 0.1, // MoE with few KV heads
     released: '2025-08',
     display: 'gpt-oss 120B',
     sizeGB: 65,
@@ -286,4 +293,29 @@ export function formatReleased(yyyymm: string): string {
 export function estimateVramGB(sizeBytes: number): number {
   const gb = sizeBytes / 1024 ** 3
   return Math.round((gb * 1.1 + 1.5) * 10) / 10
+}
+
+/** Catalog VRAM figures (and estimates for other models) assume this context length. */
+export const BASE_CONTEXT = 8192
+
+/** Parameter count in billions from "14.8B" or a tag like "qwen3:14b" / "phi4-mini:3.8b". */
+export function paramsBillion(name: string, parameterSize?: string): number | null {
+  const fromSize = /([\d.]+)\s*B/i.exec(parameterSize || '')
+  if (fromSize) return Number(fromSize[1])
+  const fromName = /[:\-_]([\d.]+)b\b/i.exec(name)
+  return fromName ? Number(fromName[1]) : null
+}
+
+/**
+ * VRAM a model needs at the user's context length: weights + runtime overhead (the 8K-context
+ * figure) plus the extra KV cache for longer contexts (or less for shorter ones).
+ */
+export function vramNeededGB(name: string, ctx: number, installed?: { size: number; parameterSize?: string }): number {
+  const info = catalogInfo(name)
+  const base = info?.vramGB ?? (installed ? estimateVramGB(installed.size) : 0)
+  const p = paramsBillion(name, installed?.parameterSize)
+  // ~0.014 GB of fp16 KV cache per 1K tokens per billion params (GQA models), capped for big models.
+  const kvPer1K = info?.kvPer1K ?? (p ? 0.014 * Math.min(p, 24) : 0.15)
+  const extra = ((ctx || BASE_CONTEXT) - BASE_CONTEXT) / 1024 * kvPer1K
+  return Math.round(Math.max(base * 0.85, base + extra) * 10) / 10
 }

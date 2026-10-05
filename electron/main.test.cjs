@@ -551,3 +551,56 @@ test('updater: a build that cannot self-update never gets stuck on "checking"', 
   const u = new Updater({ supported: true, currentVersion: '0.2.0', getAutoUpdater: () => au })
   assert.strictEqual((await u.check()).status, 'unsupported')
 })
+
+test('gpu: reads utilization + temperature and works out VRAM used by other apps', async () => {
+  const { parseNvidia, getGpuStats } = require('./gpu.cjs')
+  assert.deepStrictEqual(parseNvidia('NVIDIA GeForce RTX 5070 Ti, 16303, 4096, 1, 41\n'), [
+    { name: 'NVIDIA GeForce RTX 5070 Ti', totalMB: 16303, usedMB: 4096, utilization: 1, temperatureC: 41 },
+  ])
+  // Without a real GPU here, check the shape and that RAM/CPU readings are filled in.
+  const s1 = await getGpuStats(async () => [])
+  const s2 = await getGpuStats(async () => [{ name: 'm', size: 2 * 1048576 * 1024, sizeVram: 1048576 * 1024 }])
+  assert.ok(s2.ramUsedMB > 0 && s2.ramUsedMB <= s2.systemRamMB)
+  assert.ok(s2.cpuPercent === null || (s2.cpuPercent >= 0 && s2.cpuPercent <= 100))
+  assert.strictEqual(s2.ollamaVramMB, 1024)
+  assert.strictEqual(s2.otherUsedMB, Math.max(0, s2.usedMB - 1024))
+  assert.deepStrictEqual(s2.models, [{ name: 'm', vramMB: 1024, totalMB: 2048 }])
+  assert.ok('otherUsedMB' in s1)
+})
+
+test('selecting a model without loading it ("Use this model")', async () => {
+  const ollama = fakeOllama()
+  const mm = new ModelManager({ ollama, idleSeconds: () => 30, initialModel: 'ollama:a:1b' })
+  await mm.load()
+  await mm.setModel('ollama:b:2b', { load: false })
+  // The old model is freed from VRAM, the new one is only selected.
+  assert.deepStrictEqual(ollama.calls, [['load', 'a:1b'], ['unload', 'a:1b']])
+  assert.strictEqual(mm.current, 'ollama:b:2b')
+  assert.strictEqual(mm.status, 'unloaded')
+  await mm.load() // user presses "Load model"
+  assert.deepStrictEqual(ollama.calls.at(-1), ['load', 'b:2b'])
+  assert.strictEqual(mm.status, 'loaded')
+})
+
+test('idle unload can be turned off ("Never") and keep_alive follows the setting', async () => {
+  const { keepAliveFor } = require('./modelManager.cjs')
+  assert.strictEqual(keepAliveFor(0), -1)
+  assert.strictEqual(keepAliveFor(30), '600s')
+  assert.strictEqual(keepAliveFor(3600), '3900s')
+  let now = 0
+  let idle = 0
+  const ollama = { calls: [], load: async (m, ka) => ollama.calls.push(['load', m, ka]), unload: async (m) => ollama.calls.push(['unload', m]) }
+  const mm = new ModelManager({ ollama, idleSeconds: () => idle, initialModel: 'ollama:a:1b', now: () => now })
+  mm.touch()
+  await mm.queue
+  assert.deepStrictEqual(ollama.calls[0], ['load', 'a:1b', -1])
+  now = 10 * 3600 * 1000
+  mm.tick()
+  await mm.queue
+  assert.strictEqual(mm.status, 'loaded') // never unloads
+  assert.strictEqual(mm.state().idleRemaining, null)
+  idle = 60 // user switches back to 1 minute
+  mm.tick()
+  await mm.queue
+  assert.strictEqual(mm.status, 'unloaded')
+})

@@ -601,6 +601,7 @@ async function runAgent(p) {
         apiKey: p.apiKey,
         ollama: p.ollama,
         numCtx: p.numCtx,
+        keepAlive: p.keepAlive,
         messages,
         tools,
         signal: p.signal,

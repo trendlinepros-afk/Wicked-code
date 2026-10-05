@@ -10,7 +10,7 @@ function run(cmd, args) {
   })
 }
 
-/** Parse `nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv,noheader,nounits`. */
+/** Parse `nvidia-smi --query-gpu=name,memory.total,memory.used[,utilization.gpu,temperature.gpu] --format=csv,noheader,nounits`. */
 function parseNvidia(out) {
   const gpus = []
   for (const line of out.split(/\r?\n/)) {
@@ -19,9 +19,33 @@ function parseNvidia(out) {
     const total = Number(parts[1])
     const used = Number(parts[2])
     if (!Number.isFinite(total) || !Number.isFinite(used)) continue
-    gpus.push({ name: parts[0], totalMB: total, usedMB: used })
+    const gpu = { name: parts[0], totalMB: total, usedMB: used }
+    const util = Number(parts[3])
+    const temp = Number(parts[4])
+    if (parts.length > 3 && Number.isFinite(util)) gpu.utilization = util
+    if (parts.length > 4 && Number.isFinite(temp)) gpu.temperatureC = temp
+    gpus.push(gpu)
   }
   return gpus
+}
+
+let lastCpu = null
+/** Whole-machine CPU usage % since the previous call (like Task Manager's CPU graph). */
+function cpuPercent() {
+  const cpus = os.cpus()
+  const now = cpus.reduce(
+    (a, c) => {
+      const t = c.times
+      a.idle += t.idle
+      a.total += t.user + t.nice + t.sys + t.idle + t.irq
+      return a
+    },
+    { idle: 0, total: 0 },
+  )
+  const prev = lastCpu
+  lastCpu = now
+  if (!prev || now.total <= prev.total) return null
+  return Math.round(100 * (1 - (now.idle - prev.idle) / (now.total - prev.total)))
 }
 
 /** Parse `rocm-smi --showmeminfo vram --showproductname --json`. */
@@ -53,12 +77,13 @@ let cachedSource = null // remember which probe worked so we don't spawn failing
  */
 async function getGpuStats(getLoaded) {
   const systemRamMB = Math.round(os.totalmem() / 1048576)
+  const ramUsedMB = systemRamMB - Math.round(os.freemem() / 1048576)
   let gpus = []
   let source = 'none'
 
   if (cachedSource === null || cachedSource === 'nvidia') {
     const out = await run('nvidia-smi', [
-      '--query-gpu=name,memory.total,memory.used',
+      '--query-gpu=name,memory.total,memory.used,utilization.gpu,temperature.gpu',
       '--format=csv,noheader,nounits',
     ])
     if (out) gpus = parseNvidia(out)
@@ -89,7 +114,10 @@ async function getGpuStats(getLoaded) {
   const usedMB = gpus.reduce((a, g) => a + g.usedMB, 0)
   // Per-model memory of what Ollama currently has loaded (VRAM part and total incl. any CPU offload).
   const models = loaded.map((m) => ({ name: m.name, vramMB: Math.round((m.sizeVram || 0) / 1048576), totalMB: Math.round((m.size || 0) / 1048576) }))
-  return { source, gpus, totalMB, usedMB, ollamaVramMB, systemRamMB, models }
+  // VRAM used by everything except Ollama's models (browser, games, desktop…). Switching models
+  // unloads the old one first, so this is what a newly loaded model has to share the GPU with.
+  const otherUsedMB = Math.max(0, usedMB - ollamaVramMB)
+  return { source, gpus, totalMB, usedMB, ollamaVramMB, otherUsedMB, systemRamMB, ramUsedMB, cpuPercent: cpuPercent(), models }
 }
 
 module.exports = { getGpuStats, parseNvidia, parseRocm }

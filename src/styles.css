@@ -2114,3 +2114,99 @@ textarea.input {
 .rs-scale span:last-child {
   transform: translateX(-100%);
 }
+
+/* ---------- live system panel ---------- */
+.sysnow {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+}
+.sysnow-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sysnow-vram {
+  margin-top: 12px;
+}
+.sysnow-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-4);
+}
+.sysnow-bar .seg {
+  height: 100%;
+  transition: width 0.4s;
+}
+.seg.other,
+.dot.other {
+  background: var(--warn);
+}
+.seg.ollama,
+.dot.ollama {
+  background: var(--accent);
+}
+.dot.free {
+  background: var(--bg-4);
+  border: 1px solid var(--line-2);
+}
+.sysnow-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  color: var(--muted);
+}
+.sysnow-legend b {
+  color: var(--text);
+}
+.sysnow-legend .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.sysnow-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.sysnow-stats .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.sysnow-stats .stat span {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.sysnow-stats .stat b {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.sysnow-stats .stat.highlight {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.mf-best {
+  height: 37px;
+}
+.mf-best.active {
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+.model-control-vram.too-big {
+  color: var(--warn);
+}

@@ -8,6 +8,15 @@ function parseModelId(id) {
   return { provider: id.slice(0, i), model: id.slice(i + 1) }
 }
 
+/**
+ * Ollama-side keep_alive: a safety net in case the app closes without unloading.
+ * Longer than our own idle timer so ours always wins; -1 (forever) when auto-unload is off.
+ */
+function keepAliveFor(idleSeconds) {
+  if (!(idleSeconds > 0)) return -1
+  return `${Math.max(600, idleSeconds + 300)}s`
+}
+
 class ModelManager extends EventEmitter {
   /**
    * @param {object} opts
@@ -18,6 +27,7 @@ class ModelManager extends EventEmitter {
    */
   constructor({ ollama, idleSeconds, initialModel, now }) {
     super()
+    this.keepAlive = () => keepAliveFor(idleSeconds())
     this.ollama = ollama
     this.idleSeconds = idleSeconds
     this.now = now || Date.now
@@ -42,7 +52,7 @@ class ModelManager extends EventEmitter {
       local: this.isLocal(),
       busy: this.busy > 0,
       idleSeconds: this.idleSeconds(),
-      idleRemaining: this.status === 'loaded' && this.busy === 0
+      idleRemaining: this.status === 'loaded' && this.busy === 0 && this.idleSeconds() > 0
         ? Math.max(0, Math.ceil(this.idleSeconds() - (this.now() - this.lastActivity) / 1000))
         : null,
     }
@@ -69,7 +79,7 @@ class ModelManager extends EventEmitter {
       this.lastActivity = this.now()
       this.setStatus('loading')
       try {
-        await this.ollama.load(model)
+        await this.ollama.load(model, this.keepAlive())
         // The model may have been switched while we were loading.
         if (parseModelId(this.current).model !== model) {
           await this.ollama.unload(model).catch(() => {})
@@ -98,8 +108,12 @@ class ModelManager extends EventEmitter {
     })
   }
 
-  /** Switch models: unload the previous local model, then load the new one. */
-  async setModel(id) {
+  /**
+   * Switch models: unload the previous local model, then (by default) load the new one.
+   * With { load: false } the new model is only selected; the user loads it with the Load button
+   * (or it auto-loads when they start typing).
+   */
+  async setModel(id, { load = true } = {}) {
     if (id === this.current) return
     const prev = this.current
     const prevWasLoaded = this.status === 'loaded' || this.status === 'loading'
@@ -107,7 +121,7 @@ class ModelManager extends EventEmitter {
     if (prev && this.isLocal(prev) && prevWasLoaded) await this.unload(prev)
     if (this.isLocal(id)) {
       this.setStatus('unloaded')
-      await this.load()
+      if (load) await this.load()
     } else {
       this.setStatus(id ? 'cloud' : 'unloaded')
     }
@@ -136,6 +150,7 @@ class ModelManager extends EventEmitter {
   /** Called periodically: unload after the idle window with no activity. */
   tick() {
     if (this.status !== 'loaded' || this.busy > 0) return
+    if (this.idleSeconds() <= 0) return // "Never" auto-unload
     const idleMs = this.now() - this.lastActivity
     if (idleMs >= this.idleSeconds() * 1000) this.unload()
     else this.emit('state', this.state())
@@ -156,4 +171,4 @@ class ModelManager extends EventEmitter {
   }
 }
 
-module.exports = { ModelManager, parseModelId }
+module.exports = { ModelManager, parseModelId, keepAliveFor }

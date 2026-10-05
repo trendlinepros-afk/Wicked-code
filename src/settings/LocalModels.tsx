@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, type LocalModel, type PullProgress } from '../lib/api'
-import { CATALOG, catalogInfo, estimateVramGB, formatReleased, type CatalogModel } from '../lib/catalog'
-import { rateModel } from '../lib/rating'
+import { CATALOG, catalogInfo, formatReleased, vramNeededGB, type CatalogModel } from '../lib/catalog'
+import { capacity, fitsNow, rateModel } from '../lib/rating'
 import { useApp } from '../lib/store'
 import { ModelFilterBar } from './ModelFilterBar'
-import { comparator, inferTags, loadFilter, matches, saveFilter, type ModelFacts, type ModelFilter } from '../lib/modelFilter'
+import { SystemNow } from './SystemNow'
+import { bestForYouOrder, comparator, inferTags, loadFilter, matches, saveFilter, type ModelFacts, type ModelFilter } from '../lib/modelFilter'
 import { ConfirmDialog, Icon, Spinner, Stars, formatGB } from '../components/ui'
 
 type Confirm = { kind: 'delete'; name: string } | { kind: 'download'; name: string; sizeGB?: number } | null
@@ -37,9 +38,11 @@ export function LocalModels() {
 
   // ----- facts used for filtering/sorting -----
   const gpuVramGB = gpu && gpu.totalMB > 0 ? gpu.totalMB / 1024 : 0
+  const ctx = settings.contextLength || 8192
+  const ctxLabel = `${Math.round(ctx / 1024)}K`
   const installedFacts = (m: LocalModel): ModelFacts => {
     const info = catalogInfo(m.name)
-    const vramGB = info?.vramGB ?? estimateVramGB(m.size)
+    const vramGB = vramNeededGB(m.name, ctx, m)
     return {
       name: m.name,
       display: info?.display ?? m.name,
@@ -49,19 +52,21 @@ export function LocalModels() {
       tags: info?.tags ?? inferTags(m.name, m.family, vramGB),
       text: `${m.family} ${m.parameterSize} ${info?.strengths ?? ''} ${settings.modelNotes[m.name] ?? ''}`,
       released: info?.released,
+      fitsNow: fitsNow(vramGB, gpu),
     }
   }
   const storeFacts = (m: CatalogModel): ModelFacts => ({
     name: m.name,
     display: m.display,
-    vramGB: m.vramGB,
+    vramGB: vramNeededGB(m.name, ctx),
     sizeGB: m.sizeGB,
-    stars: rateModel(m.vramGB, gpu).stars,
+    stars: rateModel(vramNeededGB(m.name, ctx), gpu).stars,
     tags: m.tags,
     text: `${m.strengths} ${m.weaknesses}`,
     released: m.released,
+    fitsNow: fitsNow(vramNeededGB(m.name, ctx), gpu),
   })
-  const cmp = comparator(filter.sort)
+  const cmp = comparator(filter.sort) ?? (filter.bestForYou ? bestForYouOrder : null)
   type Entry = { facts: ModelFacts; installed: boolean; node: () => ReactNode; order: number }
   const finish = (list: Entry[]) => {
     const out = list.filter((e) => matches(filter, e.facts, gpuVramGB))
@@ -102,7 +107,7 @@ export function LocalModels() {
     () => Array.from(new Set([...CATALOG.flatMap((m) => m.tags), ...localModels.flatMap((m) => installedFacts(m).tags)])).sort(),
     [localModels],
   )
-  const maxVramScale = Math.max(32, Math.ceil(Math.max(...CATALOG.map((m) => m.vramGB), ...downloadedAll.map((e) => e.facts.vramGB), 0) / 8) * 8)
+  const maxVramScale = Math.max(32, Math.ceil(Math.max(...CATALOG.map((m) => vramNeededGB(m.name, ctx)), ...downloadedAll.map((e) => e.facts.vramGB), 0) / 8) * 8)
 
   const doConfirm = async () => {
     const c = confirm
@@ -125,7 +130,7 @@ export function LocalModels() {
 
   function installedCard(m: LocalModel) {
       const info = catalogInfo(m.name)
-      const need = info?.vramGB ?? estimateVramGB(m.size)
+      const need = vramNeededGB(m.name, ctx, m)
       const r = rateModel(need, gpu)
       const id = `ollama:${m.name}`
       const selected = settings.selectedModel === id
@@ -143,7 +148,7 @@ export function LocalModels() {
             </div>
           </header>
           <div className="model-facts">
-            <span>
+            <span title={`Weights + memory for your ${ctxLabel} context window (Settings → General)`}>
               <b>{formatGB(need, false)}</b> VRAM needed
             </span>
             <span>{formatGB(m.size)} on disk</span>
@@ -158,7 +163,8 @@ export function LocalModels() {
             <button
               className={`btn btn-sm ${selected ? '' : 'btn-primary'}`}
               disabled={selected || r.stars === 0 || modelState?.busy}
-              onClick={() => selectModel(id)}
+              onClick={() => selectModel(id, { load: false })}
+              title="Select this model. Load it with the button at the top (or just start typing)."
             >
               {selected ? 'Active model' : 'Use this model'}
             </button>
@@ -171,7 +177,8 @@ export function LocalModels() {
   }
 
   function storeCard(m: CatalogModel) {
-      const r = rateModel(m.vramGB, gpu)
+      const need = vramNeededGB(m.name, ctx)
+      const r = rateModel(need, gpu)
       return (
         <article key={m.name} className={`model-card store ${m.featured ? 'featured' : ''}`}>
           <FavoriteButton on={isFav(m.name)} onToggle={() => toggleFavorite(m.name)} />
@@ -188,8 +195,8 @@ export function LocalModels() {
             </div>
           </header>
           <div className="model-facts">
-            <span>
-              <b>{formatGB(m.vramGB, false)}</b> VRAM needed
+            <span title={`Weights + memory for your ${ctxLabel} context window (Settings → General)`}>
+              <b>{formatGB(need, false)}</b> VRAM needed
             </span>
             <span>{formatGB(m.sizeGB, false)} download</span>
             {m.tags.map((t) => (
@@ -213,19 +220,10 @@ export function LocalModels() {
       )
   }
 
-  const gpuSummary = gpu
-    ? gpu.totalMB > 0
-      ? `${gpu.gpus.map((g) => g.name).join(' + ')} · ${(gpu.totalMB / 1024).toFixed(0)} GB VRAM · ${(gpu.systemRamMB / 1024).toFixed(0)} GB RAM`
-      : `No GPU detected · ${(gpu.systemRamMB / 1024).toFixed(0)} GB RAM`
-    : 'Detecting hardware…'
-
   return (
     <div className="settings-page wide">
       <h2>Local Model Management</h2>
-      <div className="hw-summary">
-        <Icon name="cpu" size={16} /> {gpuSummary}
-        <span className="muted small"> · Ratings estimate how well each model will run on this machine.</span>
-      </div>
+      <SystemNow />
       {!ollamaRunning && (
         <div className="callout warn">
           Ollama isn’t running at {settings.ollamaUrl}. Install it from{' '}
@@ -242,6 +240,7 @@ export function LocalModels() {
         onChange={setFilter}
         tags={allTags}
         gpuVramGB={gpuVramGB}
+        freeVramGB={gpu ? capacity(gpu).freeGB : 0}
         maxVramScale={maxVramScale}
         shown={shownModels}
         total={totalModels}

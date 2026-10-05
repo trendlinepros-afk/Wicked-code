@@ -8,7 +8,8 @@ const SECRETS = [...PROVIDERS, 'github']
 const DEFAULTS = {
   vaultPath: null,
   ollamaUrl: 'http://127.0.0.1:11434',
-  idleUnloadSeconds: 30,
+  idleUnloadSeconds: 30, // 0 = never auto-unload
+  autoLoadOnType: true, // start loading the selected local model when the user starts typing
   contextLength: 16384,
   maxAgentSteps: 100,
   autoStartOllama: true,

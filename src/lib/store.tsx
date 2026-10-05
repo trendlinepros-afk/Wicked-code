@@ -23,7 +23,8 @@ interface AppStore {
   refreshModels(): Promise<void>
   pulls: Record<string, PullProgress>
   startPull(name: string): Promise<void>
-  selectModel(id: string): Promise<void>
+  /** Select a model. By default it is loaded right away; pass { load: false } to only select it. */
+  selectModel(id: string, opts?: { load?: boolean }): Promise<void>
   appInfo: AppInfo | null
   update: UpdateState | null
   launcher: LauncherState | null
@@ -148,9 +149,9 @@ export function AppProvider({ initial, children }: { initial: Settings; children
     }
   }, [])
 
-  const selectModel = useCallback(async (id: string) => {
+  const selectModel = useCallback(async (id: string, opts?: { load?: boolean }) => {
     setSettings((s) => ({ ...s, selectedModel: id }))
-    setModelState(await api().model.set(id))
+    setModelState(await api().model.set(id, opts))
   }, [])
 
   const value = useMemo<AppStore>(

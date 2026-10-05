@@ -41,6 +41,7 @@ export function ModelFilterBar({
   onChange,
   tags,
   gpuVramGB,
+  freeVramGB,
   maxVramScale,
   shown,
   total,
@@ -49,6 +50,7 @@ export function ModelFilterBar({
   onChange(f: ModelFilter): void
   tags: string[]
   gpuVramGB: number
+  freeVramGB: number
   maxVramScale: number
   shown: number
   total: number
@@ -74,6 +76,7 @@ export function ModelFilterBar({
 
   // Chips for every active filter, each removable on its own.
   const chips: { key: string; label: string; clear(): void }[] = []
+  if (filter.bestForYou) chips.push({ key: 'best', label: `Best for you · fits in ${freeVramGB.toFixed(1)} GB free`, clear: () => set({ bestForYou: false }) })
   if (filter.sort !== 'recommended') chips.push({ key: 'sort', label: `Sort: ${SORT_LABELS[filter.sort]}`, clear: () => set({ sort: 'recommended' }) })
   if (filter.source !== 'all') chips.push({ key: 'src', label: filter.source === 'downloaded' ? 'Downloaded only' : 'Store only', clear: () => set({ source: 'all' }) })
   if (filter.minVramGB != null || filter.maxVramGB != null) {
@@ -101,6 +104,14 @@ export function ModelFilterBar({
             </button>
           )}
         </div>
+        <button
+          className={`btn mf-best ${filter.bestForYou ? 'active' : ''}`}
+          aria-pressed={filter.bestForYou}
+          onClick={() => set({ bestForYou: !filter.bestForYou })}
+          title={`Models guaranteed to run fully on your GPU with the ${freeVramGB.toFixed(1)} GB of VRAM free right now — most capable first`}
+        >
+          <Icon name="sparkle" size={15} /> Best for you
+        </button>
         <div className="mf-dropdown" ref={ref}>
           <button className={`btn mf-btn ${count ? 'active' : ''}`} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
             <Icon name="filter" size={15} /> Filter
@@ -149,7 +160,7 @@ export function ModelFilterBar({
                 {gpuVramGB > 0 && (
                   <label className="check">
                     <input type="checkbox" checked={filter.fitsOnly} onChange={(e) => set({ fitsOnly: e.target.checked })} />
-                    Only models that fit fully in my GPU ({gpuVramGB.toFixed(0)} GB)
+                    Only models that fit in my GPU’s total VRAM ({gpuVramGB.toFixed(0)} GB)
                   </label>
                 )}
               </div>
@@ -209,7 +220,7 @@ export function ModelFilterBar({
               </div>
 
               <div className="mf-foot">
-                <button className="btn btn-ghost btn-sm" disabled={!count} onClick={() => onChange({ ...DEFAULT_FILTER, query: filter.query })}>
+                <button className="btn btn-ghost btn-sm" disabled={!count} onClick={() => onChange({ ...DEFAULT_FILTER, query: filter.query, bestForYou: filter.bestForYou })}>
                   Reset filters
                 </button>
                 <button className="btn btn-primary btn-sm" onClick={() => setOpen(false)}>

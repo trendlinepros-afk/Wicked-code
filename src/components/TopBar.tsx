@@ -1,6 +1,7 @@
 import { api, parseModelId, PROVIDER_LABELS, type Mode } from '../lib/api'
 import { useApp } from '../lib/store'
-import { catalogInfo, estimateVramGB } from '../lib/catalog'
+import { catalogInfo, vramNeededGB } from '../lib/catalog'
+import { capacity } from '../lib/rating'
 import { Icon, Spinner } from './ui'
 
 export function TopBar({
@@ -34,7 +35,7 @@ export function TopBar({
 }
 
 function ModelControl() {
-  const { modelState, ollamaRunning, gpu, localModels } = useApp()
+  const { modelState, ollamaRunning, gpu, localModels, settings } = useApp()
   if (!modelState) return null
   const { provider, model } = parseModelId(modelState.model)
   const status = modelState.status
@@ -60,6 +61,7 @@ function ModelControl() {
 
   // VRAM this model uses: measured from Ollama while loaded, otherwise the estimate for loading it.
   let vramText: string | null = null
+  let tooBig: string | null = null
   if (modelState.local && model) {
     const live = gpu?.models?.find((m) => m.name === model || m.name === `${model}:latest`)
     if (live && live.vramMB > 0) {
@@ -67,8 +69,12 @@ function ModelControl() {
       if (live.totalMB - live.vramMB > 512) vramText += ` + ${((live.totalMB - live.vramMB) / 1024).toFixed(1)} GB RAM`
     } else {
       const installed = localModels.find((m) => m.name === model || m.name === `${model}:latest`)
-      const need = catalogInfo(model)?.vramGB ?? (installed ? estimateVramGB(installed.size) : null)
+      const need = catalogInfo(model) || installed ? vramNeededGB(model, settings.contextLength, installed) : null
       if (need) vramText = `~${need} GB VRAM`
+      if (need && gpu && gpu.totalMB > 0) {
+        const free = capacity(gpu).freeGB
+        if (need > free) tooBig = `Only ${free.toFixed(1)} GB VRAM is free right now (other apps are using ${((gpu.otherUsedMB ?? 0) / 1024).toFixed(1)} GB). This model needs ~${need} GB, so part of it will run from system RAM and be slower.`
+      }
     }
   }
 
@@ -80,9 +86,13 @@ function ModelControl() {
         <span className="model-control-status">
           {!modelState.local || ollamaRunning ? statusText : 'Ollama not running'}
           {vramText && (
-            <span className="model-control-vram" title={status === 'loaded' ? 'Memory this model is using right now' : 'Estimated memory needed to load this model'}>
+            <span
+              className={`model-control-vram ${tooBig ? 'too-big' : ''}`}
+              title={tooBig ?? (status === 'loaded' ? 'Memory this model is using right now' : 'Estimated memory needed to load this model')}
+            >
               {' · '}
               {vramText}
+              {tooBig && ` · ${capacity(gpu!).freeGB.toFixed(1)} GB free ⚠`}
             </span>
           )}
           {status === 'loaded' && !modelState.busy && modelState.idleRemaining != null && ` · unloads in ${modelState.idleRemaining}s`}

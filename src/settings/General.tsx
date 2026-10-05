@@ -4,6 +4,13 @@ import { useApp } from '../lib/store'
 import { Icon } from '../components/ui'
 import { UpdatesCard } from '../components/Updates'
 
+function formatIdle(sec: number) {
+  if (sec < 60) return `${sec} seconds`
+  if (sec % 3600 === 0) return `${sec / 3600} hour${sec === 3600 ? '' : 's'}`
+  if (sec % 60 === 0) return `${sec / 60} minute${sec === 60 ? '' : 's'}`
+  return `${Math.floor(sec / 60)} min ${sec % 60} s`
+}
+
 export function General() {
   const { settings, setSettings, ollamaRunning, refreshModels, launcher } = useApp()
   const [url, setUrl] = useState(settings.ollamaUrl)
@@ -100,18 +107,6 @@ export function General() {
           Stop Ollama when Wicked Code closes (only if Wicked Code started it)
         </label>
         <div className="field">
-          <label>Auto-unload after idle (seconds)</label>
-          <input
-            className="input narrow"
-            type="number"
-            min={10}
-            max={3600}
-            value={settings.idleUnloadSeconds}
-            onChange={(e) => set('idleUnloadSeconds', Math.max(10, Number(e.target.value) || 30))}
-          />
-          <span className="muted small">Local models unload from VRAM after this long with no chatting or coding (default 30).</span>
-        </div>
-        <div className="field">
           <label>Context window (tokens)</label>
           <select className="input narrow" value={settings.contextLength} onChange={(e) => set('contextLength', Number(e.target.value))}>
             {[4096, 8192, 16384, 32768, 65536].map((n) => (
@@ -121,6 +116,53 @@ export function General() {
             ))}
           </select>
           <span className="muted small">Larger windows let the model see more code but use more VRAM.</span>
+        </div>
+      </section>
+
+      <section className="card">
+        <h3>Model memory</h3>
+        <p className="muted small">Controls when local models are loaded into and removed from your GPU’s VRAM.</p>
+        <label className="check">
+          <input type="checkbox" checked={settings.autoLoadOnType !== false} onChange={(e) => set('autoLoadOnType', e.target.checked)} />
+          Start loading the selected model as soon as I start typing in a chat or code session
+        </label>
+        <div className="field">
+          <label>Unload the model after it sits idle for</label>
+          <div className="mf-presets">
+            {(
+              [
+                [30, '30 sec'],
+                [60, '1 min'],
+                [300, '5 min'],
+                [900, '15 min'],
+                [3600, '1 hour'],
+                [0, 'Never'],
+              ] as [number, string][]
+            ).map(([v, label]) => (
+              <button key={v} className={settings.idleUnloadSeconds === v ? 'active' : ''} onClick={() => set('idleUnloadSeconds', v)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="row">
+            <input
+              className="input narrow"
+              type="number"
+              min={0}
+              max={86400}
+              value={settings.idleUnloadSeconds}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                set('idleUnloadSeconds', Number.isFinite(v) && v >= 0 ? Math.min(86400, Math.round(v)) : 30)
+              }}
+            />
+            <span className="muted small">seconds (0 = never)</span>
+          </div>
+          <span className="muted small">
+            {settings.idleUnloadSeconds > 0
+              ? `With no chatting or coding for ${formatIdle(settings.idleUnloadSeconds)}, the model is unloaded to free your VRAM. A countdown shows next to the model name at the top.`
+              : 'Models stay loaded until you press “Unload model” or close Wicked Code.'}
+          </span>
         </div>
       </section>
 

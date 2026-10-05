@@ -9,7 +9,8 @@ export type Theme = 'system' | 'light' | 'dark'
 export interface Settings {
   vaultPath: string | null
   ollamaUrl: string
-  idleUnloadSeconds: number
+  idleUnloadSeconds: number // 0 = never
+  autoLoadOnType: boolean
   contextLength: number
   selectedModel: string | null
   permissionMode: PermissionMode
@@ -125,11 +126,15 @@ export interface ModelState {
 
 export interface GpuStats {
   source: 'nvidia' | 'amd' | 'apple' | 'none'
-  gpus: { name: string; totalMB: number; usedMB: number }[]
+  gpus: { name: string; totalMB: number; usedMB: number; utilization?: number; temperatureC?: number }[]
   totalMB: number
   usedMB: number
   ollamaVramMB: number
+  /** VRAM used by everything except Ollama's models. */
+  otherUsedMB?: number
   systemRamMB: number
+  ramUsedMB?: number
+  cpuPercent?: number | null
   /** Models Ollama currently has in memory. */
   models?: { name: string; vramMB: number; totalMB: number }[]
 }
@@ -223,7 +228,7 @@ export interface WickedApi {
   }
   model: {
     state(): Promise<ModelState>
-    set(id: string): Promise<ModelState>
+    set(id: string, opts?: { load?: boolean }): Promise<ModelState>
     load(): Promise<ModelState>
     unload(): Promise<ModelState>
     touch(): Promise<void>
