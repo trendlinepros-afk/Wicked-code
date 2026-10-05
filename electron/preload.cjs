@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('wicked', {
     load: invoke('sessions:load'),
     save: invoke('sessions:save'),
     delete: invoke('sessions:delete'),
+    rename: invoke('sessions:rename'),
+    generateTitle: invoke('sessions:generateTitle'),
   },
   ollama: { status: invoke('ollama:status'), start: invoke('ollama:start'), onLauncher: subscribe('ollama:launcher') },
   github: {
@@ -50,7 +52,7 @@ contextBridge.exposeInMainWorld('wicked', {
     onState: subscribe('model:state'),
   },
   gpu: { stats: invoke('gpu:stats') },
-  app: { info: invoke('app:info') },
+  app: { info: invoke('app:info'), openLogs: invoke('app:openLogs') },
   updater: {
     state: invoke('updater:state'),
     check: invoke('updater:check'),

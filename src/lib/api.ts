@@ -95,6 +95,8 @@ export interface Session extends SessionMeta {
   notePath?: string
   github?: { fullName: string; branch: string | null; url: string } | null
   autoApprove?: boolean
+  /** 'user' once renamed by hand (never auto-renamed after that) */
+  titleSource?: 'user' | 'auto' | 'pending'
 }
 
 export interface LocalModel {
@@ -197,6 +199,8 @@ export interface WickedApi {
     load(id: string): Promise<Session>
     save(s: Session): Promise<Session>
     delete(id: string): Promise<void>
+    rename(id: string, title: string, source?: 'user' | 'auto'): Promise<Session>
+    generateTitle(p: { modelId: string; messages: Message[] }): Promise<string>
   }
   ollama: {
     status(): Promise<{ running: boolean; url: string; launcher: LauncherState }>
@@ -235,7 +239,7 @@ export interface WickedApi {
     onState(cb: (s: ModelState) => void): Unsub
   }
   gpu: { stats(): Promise<GpuStats> }
-  app: { info(): Promise<AppInfo> }
+  app: { info(): Promise<AppInfo>; openLogs(): Promise<void> }
   updater: {
     state(): Promise<UpdateState>
     check(): Promise<UpdateState>

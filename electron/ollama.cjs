@@ -77,10 +77,10 @@ class Ollama {
   }
 
   /** Load a model into memory (empty generate request). */
-  async load(model, keepAlive = '10m') {
+  async load(model, keepAlive = '10m', options) {
     await this.request('/api/generate', {
       method: 'POST',
-      body: JSON.stringify({ model, keep_alive: keepAlive }),
+      body: JSON.stringify({ model, keep_alive: keepAlive, options }),
     })
   }
 

@@ -86,6 +86,9 @@ export function UpdatesCard() {
         </button>
       </div>
       {message && <div className="small update-msg">{message}</div>}
+      <button className="btn btn-ghost btn-sm diag-btn" onClick={() => api().app.openLogs()} title="Shows wicked.log — timings for model loads and replies, slow GPU checks and errors">
+        <Icon name="book" size={13} /> Open diagnostics log
+      </button>
       {status === 'downloading' && (
         <div className="pull-bar update-bar">
           <div style={{ width: `${update?.percent ?? 0}%` }} />

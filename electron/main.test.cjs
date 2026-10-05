@@ -604,3 +604,42 @@ test('idle unload can be turned off ("Never") and keep_alive follows the setting
   await mm.queue
   assert.strictEqual(mm.status, 'unloaded')
 })
+
+// ---------- chat naming ----------
+
+test('cleanTitle strips thinking, labels, quotes and punctuation', () => {
+  const { cleanTitle, fallbackTitle } = require('./titles.cjs')
+  assert.strictEqual(cleanTitle('<think>The user asks about Rust…</think>\n"Understanding Rust Lifetimes."'), 'Understanding Rust Lifetimes')
+  assert.strictEqual(cleanTitle('Title: **Fixing Login Bug**'), 'Fixing Login Bug')
+  assert.strictEqual(cleanTitle('Sure!\nHome Lab Network Plan'), 'Home Lab Network Plan')
+  assert.ok(cleanTitle('word '.repeat(40)).length <= 60)
+  assert.strictEqual(fallbackTitle('  can you help me   set up a postgres database for my side project please '), 'can you help me set up a')
+})
+
+test('generateTitle asks the session model and falls back on failure', async () => {
+  const { generateTitle } = require('./titles.cjs')
+  let body
+  const server = http.createServer((req, res) => {
+    let raw = ''
+    req.on('data', (d) => (raw += d))
+    req.on('end', () => {
+      body = JSON.parse(raw)
+      res.write(JSON.stringify({ message: { role: 'assistant', content: 'Postgres Setup For Side Project' } }) + '\n')
+      res.end(JSON.stringify({ done: true }) + '\n')
+    })
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  try {
+    const ollama = new Ollama(() => `http://127.0.0.1:${server.address().port}`)
+    const messages = [{ role: 'user', content: 'help me set up postgres' }, { role: 'assistant', content: 'Sure, first install…' }]
+    const t = await generateTitle({ provider: 'ollama', model: 'qwen3:8b', ollama, ollamaOptions: { num_ctx: 16384 }, messages })
+    assert.strictEqual(t, 'Postgres Setup For Side Project')
+    assert.deepStrictEqual(body.options, { num_ctx: 16384 }) // same options as chats: no model reload
+    assert.ok(!body.tools)
+    assert.match(body.messages[1].content, /User: help me set up postgres/)
+    const dead = new Ollama(() => 'http://127.0.0.1:9')
+    assert.strictEqual(await generateTitle({ provider: 'ollama', model: 'x', ollama: dead, messages }), 'help me set up postgres')
+  } finally {
+    server.close()
+  }
+})

@@ -9,10 +9,12 @@ const { listCloudModels, testApiKey } = require('./providers.cjs')
 const { runAgent } = require('./agent.cjs')
 const { Vault, setupVault, inspectVault } = require('./vault.cjs')
 const { Updater } = require('./updater.cjs')
+const { generateTitle } = require('./titles.cjs')
 const { ProcessManager } = require('./processes.cjs')
 const { GitHub, repoInfo, slugify } = require('./github.cjs')
 const { OllamaLauncher } = require('./ollamaLauncher.cjs')
 const os = require('os')
+const { initLog, log, logFile } = require('./log.cjs')
 
 // Pin the settings folder so it never changes between versions; app updates don't touch it.
 app.setPath('userData', path.join(app.getPath('appData'), 'Wicked Code'))
@@ -126,6 +128,19 @@ async function browserCheck({ url, waitMs = 1500, script }) {
   }
 }
 
+/**
+ * Options used for every local model load and chat. Loading and chatting with identical options
+ * avoids a reload on the first message, and capping CPU threads leaves a core free so Windows stays
+ * responsive even when part of a model runs on the CPU.
+ */
+function ollamaRunOptions() {
+  const logical = os.cpus().length || 4
+  return {
+    num_ctx: Number(config.get('contextLength')) || 8192,
+    num_thread: Math.max(2, Math.floor(logical / 2) - 1),
+  }
+}
+
 function cloneRoot() {
   return config.get('cloneRoot') || path.join(os.homedir(), 'Wicked Code Repos')
 }
@@ -174,6 +189,34 @@ function registerIpc() {
   handle('sessions:load', (id) => vault.load(id))
   handle('sessions:save', (s) => vault.save(s))
   handle('sessions:delete', (id) => vault.remove(id))
+  // Rename from the latest saved copy, so a rename never overwrites newer messages.
+  handle('sessions:rename', async (id, title, source = 'user') => {
+    const s = await vault.load(id)
+    if (source === 'auto' && s.titleSource === 'user') return s // never override a name the user chose
+    const clean = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+    if (!clean) throw new Error('Title cannot be empty.')
+    return vault.save({ ...s, title: clean, titleSource: source })
+  })
+  handle('sessions:generateTitle', async ({ modelId, messages }) => {
+    const { provider, model } = parseModelId(modelId)
+    models.beginBusy() // don't let the idle timer unload the model mid-title
+    const started = Date.now()
+    try {
+      const title = await generateTitle({
+        provider,
+        model,
+        apiKey: provider === 'ollama' ? null : config.getApiKey(provider),
+        ollama,
+        ollamaOptions: ollamaRunOptions(),
+        keepAlive: models.keepAlive(),
+        messages,
+      })
+      log('title', 'generated', { ms: Date.now() - started, title })
+      return title
+    } finally {
+      models.endBusy()
+    }
+  })
 
   // ----- models -----
   handle('ollama:status', async () => ({ running: await ollama.isRunning(), url: config.get('ollamaUrl'), launcher: launcher.state }))
@@ -259,15 +302,39 @@ function registerIpc() {
     else models.touch()
   })
 
+  // GPU stats: one probe at a time (never pile up nvidia-smi calls), and while a model is
+  // generating, query the GPU driver at most every 6 s — driver queries during heavy CUDA work
+  // can stall the whole system on some Windows setups.
+  let gpuProbe = null
+  let lastGpu = null
+  let lastGpuAt = 0
   handle('gpu:stats', async () => {
-    const stats = await getGpuStats(() => ollama.ps())
+    const minGap = models.busy > 0 ? 6000 : 1500
+    if (gpuProbe) return lastGpu ?? gpuProbe
+    if (lastGpu && Date.now() - lastGpuAt < minGap) return lastGpu
+    gpuProbe = (async () => {
+      const started = Date.now()
+      let loaded = []
+      try {
+        loaded = await ollama.ps()
+        models.reconcile(loaded)
+      } catch {
+        /* ollama offline */
+      }
+      const stats = await getGpuStats(async () => loaded)
+      const took = Date.now() - started
+      if (took > 1500) log('gpu', 'slow GPU probe', { ms: took, busy: models.busy > 0 })
+      lastGpu = stats
+      lastGpuAt = Date.now()
+      return stats
+    })()
     try {
-      models.reconcile(await ollama.ps())
-    } catch {
-      /* ollama offline */
+      return await gpuProbe
+    } finally {
+      gpuProbe = null
     }
-    return stats
   })
+  handle('app:openLogs', () => shell.showItemInFolder(logFile()))
 
   // ----- app info + updates -----
   handle('app:info', () => ({ version: app.getVersion(), packaged: app.isPackaged, platform: process.platform }))
@@ -289,7 +356,32 @@ function registerIpc() {
     runs.set(runId, ac)
     if (modelId !== models.current) await models.setModel(modelId)
     models.beginBusy()
-    const emit = (type, payload = {}) => send('agent:event', { runId, type, ...payload })
+    // Coalesce streamed tokens: one UI update per ~60 ms instead of one per token.
+    const pending = { text: '', thinking: '' }
+    let flushTimer = null
+    const flush = () => {
+      clearTimeout(flushTimer)
+      flushTimer = null
+      if (pending.thinking) send('agent:event', { runId, type: 'thinking', text: pending.thinking })
+      if (pending.text) send('agent:event', { runId, type: 'text', text: pending.text })
+      pending.text = ''
+      pending.thinking = ''
+    }
+    const started = Date.now()
+    let firstTokenAt = 0
+    let streamedChars = 0
+    const emit = (type, payload = {}) => {
+      if (type === 'text' || type === 'thinking') {
+        if (!firstTokenAt) firstTokenAt = Date.now()
+        streamedChars += payload.text.length
+        pending[type] += payload.text
+        if (!flushTimer) flushTimer = setTimeout(flush, 60)
+        return
+      }
+      flush()
+      send('agent:event', { runId, type, ...payload })
+    }
+    log('run', 'start', { mode, model: modelId, ctx: config.get('contextLength'), status: models.status, history: history.length })
     try {
       const memory = config.get('useVaultMemory') ? await vault.readMemory() : null
       if (autoApprove) runAllowAll.add(runId)
@@ -313,6 +405,7 @@ function registerIpc() {
         ollama,
         numCtx: Number(config.get('contextLength')) || 0,
         keepAlive: models.keepAlive(),
+        ollamaOptions: ollamaRunOptions(),
         permissionMode: config.get('permissionMode'),
         signal: ac.signal,
         emit,
@@ -325,8 +418,18 @@ function registerIpc() {
             emit('approval', { requestId, call })
           }),
       })
+      flush()
+      log('run', 'done', {
+        ms: Date.now() - started,
+        firstTokenMs: firstTokenAt ? firstTokenAt - started : null,
+        chars: streamedChars,
+        charsPerSec: firstTokenAt ? Math.round(streamedChars / Math.max(0.001, (Date.now() - firstTokenAt) / 1000)) : 0,
+        aborted: ac.signal.aborted,
+      })
       return { messages: produced, aborted: ac.signal.aborted }
     } catch (e) {
+      flush()
+      log('run', 'error', { message: String(e.message || e), ms: Date.now() - started })
       if (ac.signal.aborted) return { messages: [], aborted: true }
       throw e
     } finally {
@@ -356,11 +459,13 @@ function registerIpc() {
 
 app.whenReady().then(() => {
   config = new Config(app.getPath('userData'), safeStorage)
+  initLog(path.join(app.getPath('userData'), 'logs'))
   applyTheme()
   ollama = new Ollama(() => config.get('ollamaUrl'))
   vault = new Vault(() => config.get('vaultPath'))
   models = new ModelManager({
     ollama,
+    runOptions: ollamaRunOptions,
     idleSeconds: () => {
       const v = Number(config.get('idleUnloadSeconds'))
       return Number.isFinite(v) && v >= 0 ? v : 30 // 0 = never

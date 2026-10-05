@@ -602,6 +602,7 @@ async function runAgent(p) {
         ollama: p.ollama,
         numCtx: p.numCtx,
         keepAlive: p.keepAlive,
+        ollamaOptions: p.ollamaOptions,
         messages,
         tools,
         signal: p.signal,

@@ -111,11 +111,16 @@ export function AppProvider({ initial, children }: { initial: Settings; children
         /* ignore */
       }
     }
-    poll()
-    const t = setInterval(poll, 2000)
+    // Chain polls (never overlapping): the next one starts 2 s after the previous finished.
+    let t: ReturnType<typeof setTimeout>
+    const loop = async () => {
+      await poll()
+      if (alive) t = setTimeout(loop, 2000)
+    }
+    loop()
     return () => {
       alive = false
-      clearInterval(t)
+      clearTimeout(t)
     }
   }, [refreshModels])
 

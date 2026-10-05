@@ -25,8 +25,10 @@ class ModelManager extends EventEmitter {
    * @param {string|null} opts.initialModel
    * @param {() => number} [opts.now]
    */
-  constructor({ ollama, idleSeconds, initialModel, now }) {
+  constructor({ ollama, idleSeconds, initialModel, now, runOptions }) {
     super()
+    // Options (context size, threads) must match what chats use, or Ollama reloads the model on send.
+    this.runOptions = runOptions || (() => undefined)
     this.keepAlive = () => keepAliveFor(idleSeconds())
     this.ollama = ollama
     this.idleSeconds = idleSeconds
@@ -79,7 +81,7 @@ class ModelManager extends EventEmitter {
       this.lastActivity = this.now()
       this.setStatus('loading')
       try {
-        await this.ollama.load(model, this.keepAlive())
+        await this.ollama.load(model, this.keepAlive(), this.runOptions())
         // The model may have been switched while we were loading.
         if (parseModelId(this.current).model !== model) {
           await this.ollama.unload(model).catch(() => {})

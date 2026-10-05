@@ -82,13 +82,13 @@ function toOllamaMessages(messages) {
   })
 }
 
-async function streamOllama({ ollama, model, messages, tools, signal, onText, onThinking, numCtx, keepAlive }) {
+async function streamOllama({ ollama, model, messages, tools, signal, onText, onThinking, numCtx, keepAlive, ollamaOptions }) {
   const body = {
     model,
     messages: toOllamaMessages(messages),
     stream: true,
     keep_alive: keepAlive ?? '10m',
-    options: numCtx ? { num_ctx: numCtx } : undefined,
+    options: ollamaOptions ?? (numCtx ? { num_ctx: numCtx } : undefined),
   }
   if (tools?.length) {
     body.tools = tools.map((t) => ({

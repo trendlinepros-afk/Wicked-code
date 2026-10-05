@@ -3,7 +3,7 @@ import { api, parseModelId, uid, type Message, type Mode, type ProcessInfo, type
 import { useApp } from '../lib/store'
 import { MessageList, ToolArgs, EmptyIcon } from './Messages'
 import { ModelPicker } from './ModelPicker'
-import { ConfirmDialog, Icon, basename } from './ui'
+import { ConfirmDialog, Icon, Spinner, basename } from './ui'
 import { NewCodeSessionDialog } from './NewCodeSession'
 import { SidebarUpdateButton } from './Updates'
 
@@ -52,6 +52,8 @@ export function Workspace({
   const [confirmDelete, setConfirmDelete] = useState<SessionMeta | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showNewCode, setShowNewCode] = useState(false)
+  const [naming, setNaming] = useState<Set<string>>(new Set())
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [procs, setProcs] = useState<ProcessInfo[]>([])
   const runRef = useRef<RunState | null>(null)
   const lastTouch = useRef(0)
@@ -219,7 +221,9 @@ export function Workspace({
     session = {
       ...session,
       model: modelId,
-      title: isFirst ? text.replace(/\s+/g, ' ').slice(0, 60) : session.title,
+      // Named properly by the model after the first reply (see nameSession).
+      title: isFirst && session.titleSource !== 'user' ? (mode === 'code' ? 'New code session' : 'New chat') : session.title,
+      titleSource: isFirst && session.titleSource !== 'user' ? 'pending' : session.titleSource,
       messages: [...session.messages, userMsg],
       updatedAt: new Date().toISOString(),
     }
@@ -274,6 +278,46 @@ export function Workspace({
     setActive((cur) => (cur?.id === finished.id ? finished : cur))
     const saved = await persist(finished)
     setActive((cur) => (cur?.id === saved.id ? saved : cur))
+    if (saved.titleSource === 'pending') nameSession(saved.id, modelId, saved.messages)
+  }
+
+  /** Ask the model for a short title describing the conversation (can take a while on local models). */
+  const nameSession = async (id: string, modelId: string, msgs: Message[]) => {
+    setNaming((n) => new Set(n).add(id))
+    try {
+      const title = await api().sessions.generateTitle({ modelId, messages: forModel(msgs) })
+      const renamed = await api().sessions.rename(id, title, 'auto')
+      setActive((cur) => (cur?.id === id ? { ...cur, title: renamed.title, titleSource: renamed.titleSource, notePath: renamed.notePath } : cur))
+    } catch {
+      /* keep the placeholder; the user can rename it */
+    } finally {
+      setNaming((n) => {
+        const next = new Set(n)
+        next.delete(id)
+        return next
+      })
+      refreshList()
+    }
+  }
+
+  const commitRename = async () => {
+    if (!editing) return
+    const { id, text } = editing
+    setEditing(null)
+    const title = text.replace(/\s+/g, ' ').trim()
+    if (!title) return
+    try {
+      if (active?.id === id && !active.notePath) {
+        // Not saved yet (no messages): just rename locally.
+        setActive({ ...active, title, titleSource: 'user' })
+        return
+      }
+      const renamed = await api().sessions.rename(id, title, 'user')
+      setActive((cur) => (cur?.id === id ? { ...cur, title: renamed.title, titleSource: 'user', notePath: renamed.notePath } : cur))
+      refreshList()
+    } catch (e) {
+      setError(String((e as Error).message || e))
+    }
   }
 
   const stop = () => run && api().agent.stop(run.runId)
@@ -313,23 +357,64 @@ export function Workspace({
         <div className="session-list">
           {!metas.length && <div className="muted small pad">No {mode === 'code' ? 'code sessions' : 'chats'} yet.</div>}
           {metas.map((m) => (
-            <div key={m.id} className={`session-item ${active?.id === m.id ? 'active' : ''}`} onClick={() => openSession(m.id)}>
-              <div className="session-title">{m.title}</div>
+            <div
+              key={m.id}
+              className={`session-item ${active?.id === m.id ? 'active' : ''} ${editing?.id === m.id ? 'editing' : ''}`}
+              onClick={() => editing?.id !== m.id && openSession(m.id)}
+            >
+              {editing?.id === m.id ? (
+                <input
+                  className="session-rename"
+                  autoFocus
+                  value={editing.text}
+                  onChange={(e) => setEditing({ id: m.id, text: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitRename()
+                    if (e.key === 'Escape') setEditing(null)
+                  }}
+                  onBlur={commitRename}
+                  onFocus={(e) => e.target.select()}
+                  maxLength={80}
+                />
+              ) : (
+                <div className="session-title">
+                  {naming.has(m.id) ? (
+                    <span className="session-naming">
+                      <Spinner /> Naming…
+                    </span>
+                  ) : (
+                    m.title
+                  )}
+                </div>
+              )}
               <div className="session-meta">
                 {mode === 'code' && m.folders[0] ? basename(m.folders[0]) + ' · ' : ''}
                 {new Date(m.updatedAt).toLocaleDateString()}
                 {run?.sessionId === m.id && <span className="session-running"> · running</span>}
               </div>
-              <button
-                className="session-delete"
-                title="Delete session"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setConfirmDelete(m)
-                }}
-              >
-                <Icon name="trash" size={14} />
-              </button>
+              {editing?.id !== m.id && (
+                <div className="session-actions">
+                  <button
+                    title="Rename"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setEditing({ id: m.id, text: m.title })
+                    }}
+                  >
+                    <Icon name="pencil" size={14} />
+                  </button>
+                  <button
+                    className="danger"
+                    title="Delete"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setConfirmDelete(m)
+                    }}
+                  >
+                    <Icon name="trash" size={14} />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
