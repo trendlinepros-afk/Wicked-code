@@ -64,6 +64,10 @@ export interface Message {
   thinking?: string
   /** Reminder the app sent to the model (shown as a small note, not as the user's message) */
   synthetic?: boolean
+  /** Synthetic "look at this screenshot" review prompt after a browser_check */
+  review?: boolean
+  /** Screenshot thumbnail (data URL) of a browser_check result */
+  thumb?: string
 }
 
 export interface RepoInfo {
@@ -123,6 +127,8 @@ export interface Session extends SessionMeta {
   permissionMode?: PermissionMode
   /** 'user' once renamed by hand (never auto-renamed after that) */
   titleSource?: 'user' | 'auto' | 'pending'
+  /** What the built-in preview panel last showed (file in the working folder or local URL) */
+  previewTarget?: string
 }
 
 export interface LocalModel {
@@ -176,6 +182,12 @@ export interface PullProgress {
   error?: string | null
 }
 
+export interface NotesContext {
+  id: string
+  title: string
+  mode: Mode
+}
+
 export type AgentEvent =
   | { runId: string; type: 'turn-start' }
   | { runId: string; type: 'text'; text: string }
@@ -185,6 +197,7 @@ export type AgentEvent =
   | { runId: string; type: 'tool-result'; message: Message }
   | { runId: string; type: 'nudge'; message: Message }
   | { runId: string; type: 'approval'; requestId: string; call: ToolCall }
+  | { runId: string; type: 'preview'; target: string; url: string }
 
 type Unsub = () => void
 
@@ -216,6 +229,22 @@ export interface WickedApi {
   }
   dialog: { pickFolder(title?: string): Promise<string | null> }
   shell: { openPath(p: string): Promise<string> }
+  notes: {
+    open(): Promise<void>
+    /** Tell the notes window which session is open in the main window */
+    setContext(ctx: NotesContext | null): Promise<void>
+    getContext(): Promise<NotesContext | null>
+    onContext(cb: (ctx: NotesContext | null) => void): Unsub
+    read(scope: 'app' | 'session', id?: string): Promise<string>
+    write(scope: 'app' | 'session', id: string | undefined, text: string): Promise<{ file: string; bytes: number }>
+    writeNow(scope: 'app' | 'session', id: string | undefined, text: string): void
+    onFlush(cb: () => void): Unsub
+  }
+  preview: {
+    urlFor(folder: string, target: string): Promise<string>
+    openExternal(url: string): Promise<void>
+    capture(rect: { x: number; y: number; width: number; height: number }): Promise<Attachment>
+  }
   files: {
     pathFor(file: File): string
     extract(paths: string[]): Promise<Attachment[]>
@@ -292,6 +321,8 @@ export interface WickedApi {
       sessionId: string
       autoApprove?: boolean
       permissionMode?: PermissionMode
+      /** the model can look at images (gets browser_check screenshots) */
+      vision?: boolean
     }): Promise<{
       messages: Message[]
       aborted: boolean

@@ -47,7 +47,8 @@ const TOOL_LABELS: Record<string, string> = {
   edit_file: 'Edit',
   run_command: 'Run',
   save_document: 'Save document',
-  open_in_browser: 'Open',
+  open_in_browser: 'Preview',
+  show_preview: 'Preview',
   start_process: 'Start',
   read_process_output: 'Logs',
   stop_process: 'Stop',
@@ -97,6 +98,7 @@ export function ToolArgs({ call }: { call: ToolCall }) {
 
 function ToolRow({ call, result, pending }: { call: ToolCall; result?: Message; pending: boolean }) {
   const [open, setOpen] = useState(false)
+  const [big, setBig] = useState(false)
   return (
     <div className={`tool-row ${result?.isError ? 'error' : ''}`}>
       <button className="tool-row-head" onClick={() => setOpen((o) => !o)}>
@@ -106,6 +108,11 @@ function ToolRow({ call, result, pending }: { call: ToolCall; result?: Message; 
         {!result && pending && <Spinner />}
         {result?.isError && <span className="tool-badge">failed</span>}
       </button>
+      {result?.thumb && (
+        <button className={`tool-shot ${big ? 'big' : ''}`} onClick={() => setBig((b) => !b)} title={big ? 'Click to shrink' : 'Screenshot the agent took while testing — click to enlarge'}>
+          <img src={result.thumb} alt="Screenshot of the page under test" />
+        </button>
+      )}
       {open && (
         <div className="tool-row-body">
           <ToolArgs call={call} />
@@ -132,6 +139,13 @@ export function MessageList({
     <>
       {messages.map((m, i) => {
         if (m.role === 'tool') return null
+        if (m.role === 'user' && m.synthetic && m.review) {
+          return (
+            <div key={i} className="msg nudge review" title={m.content}>
+              <Icon name="image" size={13} /> The model is looking at the screenshot: “Does this look like what you asked for? Any errors?”
+            </div>
+          )
+        }
         if (m.role === 'user' && m.synthetic) {
           return (
             <div key={i} className="msg nudge" title={m.content}>

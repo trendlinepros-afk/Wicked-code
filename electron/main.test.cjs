@@ -832,16 +832,16 @@ test('code agent: replay of the snake-game session — text tool calls run, past
     const produced = await runAgent({
       mode: 'code', provider: 'ollama', model: 'qwen2.5-coder:7b', history: [{ role: 'user', content: 'create the snake game' }],
       folders: [dir], memory: null, ollama, numCtx: 8192, permissionMode: 'auto-all',
-      openForUser: async (t) => opened.push(t),
+      showPreview: (t) => opened.push(t),
       signal: new AbortController().signal, emit: () => {}, requestApproval: async () => true,
     })
     assert.strictEqual(fs.readFileSync(path.join(dir, 'index.html'), 'utf8'), html)
-    assert.deepStrictEqual(opened, [{ path: path.join(dir, 'index.html') }])
+    assert.deepStrictEqual(opened, [path.join(dir, 'index.html')])
     const roles = produced.map((m) => (m.synthetic ? 'nudge' : m.role === 'tool' ? `tool:${m.toolName}` : m.role))
-    assert.deepStrictEqual(roles, ['assistant', 'tool:list_files', 'assistant', 'nudge', 'assistant', 'tool:write_file', 'assistant', 'tool:open_in_browser', 'assistant'])
+    assert.deepStrictEqual(roles, ['assistant', 'tool:list_files', 'assistant', 'nudge', 'assistant', 'tool:write_file', 'assistant', 'tool:show_preview', 'assistant'])
     assert.ok(!produced[0].content.includes('"name"')) // raw JSON hidden from the chat
     assert.match(requests[0].messages[0].content, /Never claim you created/)
-    assert.ok(requests[0].tools.some((t) => t.function.name === 'open_in_browser'))
+    assert.ok(requests[0].tools.some((t) => t.function.name === 'show_preview'))
   } finally {
     server.close()
   }
@@ -936,4 +936,118 @@ test('Ollama started by the app gets the same VRAM buffer (OLLAMA_GPU_OVERHEAD)'
   })
   await l.ensure()
   assert.strictEqual(env.OLLAMA_GPU_OVERHEAD, String(1024 ** 3))
+})
+
+// ---------- built-in preview + look/check/fix loop ----------
+
+test('preview roots: working-folder files get a wicked-preview URL; paths outside are refused', () => {
+  const { PreviewRoots } = require('./preview.cjs')
+  const dir = tmpDir()
+  fs.mkdirSync(path.join(dir, 'game'))
+  fs.writeFileSync(path.join(dir, 'game', 'index.html'), '<h1>hi</h1>')
+  const roots = new PreviewRoots()
+  const url = roots.urlFor(dir, 'game/index.html')
+  assert.match(url, /^wicked-preview:\/\/[0-9a-f]{16}\/game\/index\.html$/)
+  assert.strictEqual(roots.urlFor(dir, path.join(dir, 'game', 'index.html')), url) // absolute paths too
+  assert.strictEqual(roots.fileFor(url), path.join(dir, 'game', 'index.html'))
+  assert.strictEqual(roots.fileFor(url.replace('/game/index.html', '/game/')), path.join(dir, 'game', 'index.html')) // folder → index.html
+  assert.strictEqual(roots.fileFor(url.replace('/game/index.html', '/..%2F..%2Fetc%2Fpasswd')), null)
+  assert.strictEqual(roots.fileFor('wicked-preview://0000000000000000/index.html'), null)
+  assert.throws(() => roots.urlFor(dir, '../outside.html'), /outside the working folder/)
+  assert.strictEqual(roots.urlFor(dir, 'http://localhost:5173/'), 'http://localhost:5173/')
+  assert.throws(() => roots.urlFor(dir, 'https://example.com/'), /Only local pages/)
+})
+
+test('code agent: browser_check shows a vision model the screenshot, it fixes the page, re-checks, then shows the preview', async () => {
+  const dir = tmpDir()
+  const { server, requests, ollama } = await scriptedOllama([
+    { tool: 'write_file', args: { path: 'index.html', content: '<h1>Snake</h1><canvas></canvas>' } },
+    { tool: 'browser_check', args: { url: 'index.html' } },
+    { content: 'The canvas is blank — adding the game loop.', tool: 'edit_file', args: { path: 'index.html', old_string: '<canvas></canvas>', new_string: '<canvas id="c"></canvas><script>/* loop */</script>' } },
+    { tool: 'browser_check', args: { url: 'index.html' } },
+    { content: 'Looks right.', tool: 'show_preview', args: { target: 'index.html' } },
+    { content: 'Done: the game is in the preview panel.' },
+  ])
+  const shown = []
+  const events = []
+  let checks = 0
+  try {
+    const produced = await runAgent({
+      mode: 'code', provider: 'ollama', model: 'qwen3.8:27b', history: [{ role: 'user', content: 'build snake' }],
+      folders: [dir], memory: null, ollama, numCtx: 16384, permissionMode: 'auto-all', vision: true,
+      browserCheck: async ({ url }) => ({ text: `Loaded ${url} (check ${++checks})`, screenshot: { mime: 'image/jpeg', data: `SHOT${checks}` }, thumb: 'data:image/jpeg;base64,T' }),
+      showPreview: (t) => shown.push(t),
+      signal: new AbortController().signal, emit: (type, p) => events.push({ type, ...p }), requestApproval: async () => true,
+    })
+    // The model saw the screenshot right after the check, with the "does this look right" review prompt.
+    const afterFirst = requests[2].messages
+    const review = afterFirst[afterFirst.length - 1]
+    assert.strictEqual(review.role, 'user')
+    assert.deepStrictEqual(review.images, ['SHOT1'])
+    assert.match(review.content, /does this look like what my owner asked for/i)
+    assert.match(afterFirst[afterFirst.length - 2].content, /--- now review it ---[\s\S]*LOGS/)
+    // Only the newest screenshot is sent on later turns.
+    const later = requests[4].messages.filter((m) => m.images)
+    assert.deepStrictEqual(later.map((m) => m.images), [['SHOT2']])
+    // Tested pages appear in the preview panel, then show_preview.
+    assert.strictEqual(shown.length, 3)
+    assert.ok(shown.every((t) => t.endsWith('index.html')))
+    // Chat keeps a thumbnail, not the full screenshot.
+    const checksMsgs = produced.filter((m) => m.toolName === 'browser_check')
+    assert.ok(checksMsgs.every((m) => m.thumb === 'data:image/jpeg;base64,T'))
+    assert.ok(produced.every((m) => !m.images))
+    assert.strictEqual(produced.filter((m) => m.review).length, 2)
+    assert.ok(events.filter((e) => e.type === 'nudge').every((e) => !e.message.images))
+  } finally {
+    server.close()
+  }
+})
+
+test('code agent: non-vision models get the review checklist in text only; finishing after an untested page edit is nudged', async () => {
+  const dir = tmpDir()
+  const { server, requests, ollama } = await scriptedOllama([
+    { tool: 'write_file', args: { path: 'index.html', content: '<h1>v1</h1>' } },
+    { tool: 'browser_check', args: { url: 'index.html' } },
+    { tool: 'edit_file', args: { path: 'index.html', old_string: 'v1', new_string: 'v2' } },
+    { content: 'All done.' }, // edited after the last check → nudged
+    { tool: 'browser_check', args: { url: 'index.html' } },
+    { content: 'Checked v2, all good.' },
+  ])
+  try {
+    const produced = await runAgent({
+      mode: 'code', provider: 'ollama', model: 'qwen2.5-coder:7b', history: [{ role: 'user', content: 'make a page' }],
+      folders: [dir], memory: null, ollama, numCtx: 16384, permissionMode: 'auto-all', vision: false,
+      browserCheck: async () => ({ text: 'Loaded', screenshot: { mime: 'image/jpeg', data: 'X' }, thumb: 'data:,' }),
+      showPreview: () => {},
+      signal: new AbortController().signal, emit: () => {}, requestApproval: async () => true,
+    })
+    assert.ok(requests.every((r) => r.messages.every((m) => !m.images)))
+    assert.match(produced.find((m) => m.toolName === 'browser_check').content, /Read the title and visible text above/)
+    const nudges = produced.filter((m) => m.synthetic)
+    assert.strictEqual(nudges.length, 1)
+    assert.match(nudges[0].content, /changed the page after your last browser_check/)
+    assert.strictEqual(produced[produced.length - 1].content, 'Checked v2, all good.')
+  } finally {
+    server.close()
+  }
+})
+
+test('notes: app-wide note and one note per session, saved in the vault', () => {
+  const { NotesStore } = require('./notes.cjs')
+  const vault = tmpDir()
+  const store = new NotesStore(() => vault, path.join(tmpDir(), 'fallback'))
+  assert.strictEqual(store.read('app'), '')
+  store.write('app', undefined, '- make the sidebar wider')
+  store.write('session', 'abc123', 'snake game: speed up')
+  store.write('session', 'def456', 'other session')
+  assert.strictEqual(fs.readFileSync(path.join(vault, 'Wicked Code', 'Notes', 'App notes.md'), 'utf8'), '- make the sidebar wider')
+  assert.strictEqual(store.read('session', 'abc123'), 'snake game: speed up')
+  assert.strictEqual(store.read('session', 'def456'), 'other session')
+  assert.strictEqual(store.read('session', 'zzz'), '')
+  assert.strictEqual(store.read('session', '../../App notes'), '') // ids can't escape the folder
+  assert.throws(() => store.write('session', '', 'x'), /Unknown note/)
+  // No vault yet → app data folder.
+  const noVault = new NotesStore(() => null, path.join(vault, 'fb'))
+  noVault.write('app', undefined, 'hi')
+  assert.strictEqual(fs.readFileSync(path.join(vault, 'fb', 'App notes.md'), 'utf8'), 'hi')
 })

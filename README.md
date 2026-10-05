@@ -18,6 +18,10 @@ A simplified, local-first take on the Claude Code desktop app. It has two worksp
   - runs commands and tests (`run_command`)
   - launches servers and apps in the background (`start_process`), reads their logs and stops them
   - tests what it built with `http_request` (local servers) and `browser_check` (a real headless browser that reports page text, console errors and failed requests, and can run a script such as clicking a button)
+  - `browser_check` also takes a screenshot: vision models are shown it and asked "does this look like what my owner asked for?", then check the console for errors, fix and re-test
+  - built-in **preview panel** next to the chat shows the page it builds (no external browser); **Screenshot** attaches the preview to your next message
+- **Notes window** (sidebar → Notes): an app-wide note plus a note per chat / code session, auto-saved to `Vault/Wicked Code/Notes`
+- **VRAM safety buffer** (Settings → General): big models put only as many layers on the GPU as fit below total VRAM minus the buffer; the rest runs from system RAM
   - reads failures, fixes the code and re-runs until it passes; long loops are kept inside the model's context window automatically
 
   Edits show as diffs. You approve changes and commands, or click **Allow all for this session**. Approval level and max agent steps are in Settings → General.

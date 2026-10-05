@@ -169,13 +169,13 @@ const TEST_TOOLS = [
   {
     name: 'browser_check',
     description:
-      'Open a local web page (http://localhost… or an .html file in the working folder) in a real headless browser, run its JavaScript, and report the page title, visible text, console errors/warnings and failed network requests. Use it to verify a web UI actually renders and works.',
+      'Test a local web page (http://localhost… or an .html file in the working folder) in a real browser: runs its JavaScript, takes a screenshot (you will be shown it when your model can see images), and reports the page title, visible text, console errors/warnings and failed network requests. The page also appears in the user\'s preview panel. Use it after every change to a web page, game or front-end app.',
     parameters: {
       type: 'object',
       properties: {
         url: { type: 'string', description: 'http://localhost:PORT/path or a path to an .html file.' },
         wait_ms: { type: 'number', description: 'Extra time to wait after load for scripts to run (default 1500).' },
-        script: { type: 'string', description: 'Optional JavaScript expression evaluated in the page after load; its result is returned (e.g. to click a button and read the result).' },
+        script: { type: 'string', description: 'Optional JavaScript expression evaluated in the page after load (before the screenshot); its result is returned. Use it to click buttons, press keys or read game state.' },
       },
       required: ['url'],
     },
@@ -184,9 +184,9 @@ const TEST_TOOLS = [
 
 const OPEN_TOOLS = [
   {
-    name: 'open_in_browser',
+    name: 'show_preview',
     description:
-      'Open something you built for the user to try: an .html file in the working folder (opens in their default browser) or a local server URL like http://localhost:3000. Use this after you have built and tested a web page, game or app.',
+      'Show something you built in Wicked Code\'s built-in preview panel so the user can try it: an .html file in the working folder (e.g. "index.html") or a local server URL like http://localhost:3000. Call it once the page passes browser_check.',
     parameters: {
       type: 'object',
       properties: { target: { type: 'string', description: 'Relative file path (e.g. "index.html") or http://localhost URL.' } },
@@ -229,7 +229,7 @@ const DOC_TOOLS = [
   },
 ]
 
-/** @param {{processes?: boolean, browser?: boolean, github?: boolean, documents?: boolean}} caps */
+/** @param {{processes?: boolean, browser?: boolean, github?: boolean, documents?: boolean, open?: boolean}} caps */
 function toolsFor(mode, folders, caps = {}) {
   const docTools = caps.documents ? DOC_TOOLS : []
   if (!folders.length) return [...docTools]
@@ -467,21 +467,40 @@ async function browserCheck(ctx, args) {
   } else {
     target = 'file://' + resolvePath(ctx.folders, target.replace(/^file:\/\//, '')).split(path.sep).join('/')
   }
-  return truncate(await ctx.browserCheck({ url: target, waitMs: Number(args.wait_ms) || 1500, script: args.script }), 12_000)
+  const result = await ctx.browserCheck({ url: target, waitMs: Number(args.wait_ms) || 1500, script: args.script })
+  // Let the user watch: the tested page shows up in the preview panel too.
+  if (ctx.showPreview) {
+    try {
+      ctx.showPreview(/^https?:/i.test(String(args.url)) ? String(args.url) : target.startsWith('file://') ? decodeURI(target.slice(7)) : target)
+    } catch {
+      /* preview is best effort */
+    }
+  }
+  const text = typeof result === 'string' ? result : result.text
+  const shot = typeof result === 'string' ? null : result.screenshot
+  const review = [
+    '',
+    '--- now review it ---',
+    `1. LOOK: ${shot && ctx.vision ? 'You will be shown a screenshot of the page next.' : 'Read the title and visible text above.'} Does this look like what the user asked for? Is anything missing, broken, overlapping or blank?`,
+    '2. LOGS: Do the console messages and failed requests look expected? Any errors or warnings?',
+    '3. If anything is wrong: fix the cause (edit_file), then run browser_check again. Repeat until it looks right and has no errors. Then call show_preview.',
+  ].join('\n')
+  return { text: truncate(text, 12_000) + '\n' + review, screenshot: shot, thumb: typeof result === 'string' ? undefined : result.thumb }
 }
 
-async function openInBrowser(ctx, args) {
-  if (!ctx.openForUser) throw new Error('Opening things for the user is not available.')
-  const target = String(args.target || '').trim()
+/** Show a page in the app's built-in preview panel (old name: open_in_browser). */
+async function showPreview(ctx, args) {
+  if (!ctx.showPreview) throw new Error('The preview panel is not available.')
+  const target = String(args.target || args.url || args.path || '').trim() || 'index.html'
   if (/^https?:/i.test(target)) {
-    if (!LOCAL_HOSTS.has(new URL(target).hostname)) throw new Error('Only local URLs (localhost) can be opened.')
-    await ctx.openForUser({ url: target })
-    return `Opened ${target} in the user's browser.`
+    if (!LOCAL_HOSTS.has(new URL(target).hostname)) throw new Error('Only local URLs (localhost) can be previewed.')
+    ctx.showPreview(target)
+    return `Showing ${target} in the preview panel.`
   }
   const file = resolvePath(ctx.folders, target.replace(/^file:\/\//, ''))
   if (!fs.existsSync(file)) throw new Error(`${target} does not exist yet — create it with write_file first.`)
-  await ctx.openForUser({ path: file })
-  return `Opened ${path.relative(ctx.folders[0], file) || file} for the user.`
+  ctx.showPreview(file)
+  return `Showing ${path.relative(ctx.folders[0], file) || file} in the preview panel. The user can try it there.`
 }
 
 async function githubCreatePr(ctx, args) {
@@ -504,8 +523,10 @@ const IMPLEMENTATIONS = {
   browser_check: browserCheck,
   github_create_pull_request: githubCreatePr,
   save_document: (ctx, args) => saveDocument(ctx.attachDirs || [], args),
-  open_in_browser: openInBrowser,
+  show_preview: showPreview,
 }
+// Older name for show_preview (models may still call it).
+const TOOL_ALIASES = { open_in_browser: 'show_preview' }
 
 function needsApproval(name, permissionMode) {
   if (name === 'run_command' || name === 'start_process' || name === 'github_create_pull_request' || name === 'save_document') return permissionMode !== 'auto-all'
@@ -533,7 +554,7 @@ async function buildSystemPrompt({ mode, folders, memory, toolsAvailable, github
       'RULES:',
       '- Do the work with tools. Create and change files ONLY with write_file / edit_file — never paste whole files into your reply and never ask the user to create files themselves.',
       '- Never claim you created, changed, ran or tested anything unless a tool result in this conversation shows it. Never assume what a tool would return — call it and wait for the result.',
-      '- For a web page, browser game or front-end app: write a self-contained index.html (inline CSS and JS unless the user asks otherwise), verify it with browser_check (check for console errors and that it renders), then call open_in_browser so the user can try it.',
+      '- For a web page, browser game or front-end app: write a self-contained index.html (inline CSS and JS unless the user asks otherwise). Then loop: browser_check it → LOOK at the result and ask yourself "Does this look like what my owner asked for?" → check the console/logs: "Does this look expected? Any errors?" → if anything is wrong, fix it and browser_check again. Use browser_check\'s script to try it (click buttons, press keys) the way the user would. When it looks right with no errors, call show_preview so it appears in the app\'s preview panel. Never open external browsers.',
     )
     if (github) {
       lines.push(
@@ -623,17 +644,38 @@ const CLAIMS_WORK = /\b(I(?:'ve| have)? (?:created|written|wrote|saved|added|upd
  * If the model ended its turn without doing real work — pasting code instead of writing files, or
  * claiming it created/ran things when no tool did — return a reminder to send back to it.
  */
-function needsNudge(content, produced) {
+const WEB_FILE = /\.(html?|css|m?js|jsx|tsx?|vue|svelte)$/i
+
+function needsNudge(content, produced, caps = {}) {
   const results = produced.filter((m) => m.role === 'tool')
   const wrote = results.some((m) => !m.isError && (m.toolName === 'write_file' || m.toolName === 'edit_file'))
-  const ran = results.some((m) => !m.isError && ['run_command', 'start_process', 'browser_check', 'http_request', 'open_in_browser'].includes(m.toolName))
+  const ran = results.some((m) => !m.isError && ['run_command', 'start_process', 'browser_check', 'http_request', 'show_preview', 'open_in_browser'].includes(m.toolName))
   const fences = [...String(content).matchAll(/```[\w-]*\n([\s\S]*?)```/g)]
   const pastedCode = fences.some((f) => f[1].split('\n').length >= 6)
   if (pastedCode && !wrote) {
     return '[Wicked Code] You put code in your reply but did not create or change any files. Use write_file (or edit_file) to save it in the working folder now — do not paste it in chat — then run or open it to test that it works.'
   }
   if (CLAIMS_WORK.test(content) && !wrote && !ran) {
-    return '[Wicked Code] You said you created/ran/tested something, but no tool did that in this conversation turn. Actually do it now with the tools (write_file, run_command, browser_check, open_in_browser), then report the real results.'
+    return '[Wicked Code] You said you created/ran/tested something, but no tool did that in this conversation turn. Actually do it now with the tools (write_file, run_command, browser_check, show_preview), then report the real results.'
+  }
+  if (caps.browser) {
+    // A web page was changed after its last browser_check (or never checked): test it before finishing.
+    const calls = new Map(produced.flatMap((m) => (m.toolCalls || []).map((c) => [c.id, c])))
+    let lastWebEdit = -1
+    let lastCheck = -1
+    let html = false
+    produced.forEach((m, i) => {
+      if (m.role !== 'tool' || m.isError) return
+      const file = String(calls.get(m.toolCallId)?.args?.path || '')
+      if ((m.toolName === 'write_file' || m.toolName === 'edit_file') && WEB_FILE.test(file)) {
+        lastWebEdit = i
+        if (/\.html?$/i.test(file)) html = true
+      }
+      if (m.toolName === 'browser_check') lastCheck = i
+    })
+    if (html && lastWebEdit > lastCheck) {
+      return '[Wicked Code] You changed the page after your last browser_check (or never checked it). Run browser_check now, look at the result and the console, fix anything wrong, then call show_preview.'
+    }
   }
   return null
 }
@@ -665,7 +707,7 @@ async function runAgent(p) {
     ),
   ]
   const hasAttachments = p.history.some((m) => m.attachments?.length)
-  const caps = { processes: !!p.processes, browser: !!p.browserCheck, github: !!p.github, documents: attachDirs.length > 0, open: !!p.openForUser }
+  const caps = { processes: !!p.processes, browser: !!p.browserCheck, github: !!p.github, documents: attachDirs.length > 0, open: !!p.showPreview }
   let tools = toolsFor(p.mode, p.folders, caps)
   const prompt = (toolsAvailable) =>
     buildSystemPrompt({ mode: p.mode, folders: p.folders, memory: p.memory, toolsAvailable, github: p.github?.info, attachments: hasAttachments })
@@ -679,7 +721,8 @@ async function runAgent(p) {
     browserCheck: p.browserCheck,
     github: p.github,
     attachDirs,
-    openForUser: p.openForUser,
+    showPreview: p.showPreview,
+    vision: p.vision !== false,
   }
   let history = expandAttachments(p.history)
   // Rough character budget for the conversation (≈3 chars per token, leaving room for the reply).
@@ -690,7 +733,7 @@ async function runAgent(p) {
   for (let step = 0; step < maxSteps; step++) {
     if (p.signal.aborted) break
     p.emit('turn-start')
-    const messages = compactMessages([{ role: 'system', content: system }, ...history, ...produced], budget)
+    const messages = compactMessages([{ role: 'system', content: system }, ...history, ...withLatestScreenshot(produced)], budget)
     let result
     try {
       result = await streamChat({
@@ -709,8 +752,10 @@ async function runAgent(p) {
       })
     } catch (e) {
       const msg = String(e.message || e)
-      if (history.some((m) => m.images) && /image|vision|multimodal|projector/i.test(msg)) {
+      if ([...history, ...produced].some((m) => m.images) && /image|vision|multimodal|projector/i.test(msg)) {
         history = history.map(({ images, ...m }) => m)
+        for (const m of produced) delete m.images
+        ctx.vision = false
         p.emit('notice', { text: `${p.model} can't look at images, so the attached image(s) were skipped. Pick a vision model (e.g. qwen2.5vl or Qwen 3.8) to analyse images.` })
         step--
         continue
@@ -739,7 +784,10 @@ async function runAgent(p) {
     p.emit('assistant', { message: assistant })
     if (!result.toolCalls.length) {
       // Code mode: don't let the model stop after pasting code or claiming work it didn't do.
-      const nudge = p.mode === 'code' && tools.some((t) => t.name === 'write_file') && nudgesLeft > 0 ? needsNudge(result.content, produced) : null
+      const nudge =
+        p.mode === 'code' && tools.some((t) => t.name === 'write_file') && nudgesLeft > 0
+          ? needsNudge(result.content, produced, { browser: tools.some((t) => t.name === 'browser_check') })
+          : null
       if (nudge) {
         nudgesLeft--
         const msg = { role: 'user', content: nudge, synthetic: true }
@@ -753,30 +801,63 @@ async function runAgent(p) {
     if (step === maxSteps - 1) {
       p.emit('notice', { text: `Stopped after ${maxSteps} steps. Send “continue” to keep going.` })
     }
+    const screenshots = []
     for (const call of result.toolCalls) {
       if (p.signal.aborted) break
       let output
       let isError = false
-      const impl = IMPLEMENTATIONS[call.name]
-      const allowed = tools.some((t) => t.name === call.name)
+      let thumb
+      const name = TOOL_ALIASES[call.name] || call.name
+      const impl = IMPLEMENTATIONS[name]
+      const allowed = tools.some((t) => t.name === name)
       try {
         if (!impl || !allowed) throw new Error(`Unknown or unavailable tool: ${call.name}`)
         const permission = typeof p.permissionMode === 'function' ? p.permissionMode() : p.permissionMode
-        if (needsApproval(call.name, permission)) {
+        if (needsApproval(name, permission)) {
           const ok = await p.requestApproval(call)
           if (!ok) throw new Error('The user denied this action. Ask them how they would like to proceed.')
         }
         output = await impl(ctx, call.args || {})
+        if (output && typeof output === 'object') {
+          // browser_check: text for the model, a thumbnail for the chat, the screenshot for vision models.
+          thumb = output.thumb
+          if (output.screenshot) screenshots.push({ shot: output.screenshot, url: String(call.args?.url || '') })
+          output = output.text
+        }
       } catch (e) {
         isError = true
         output = 'Error: ' + String(e.message || e)
       }
-      const toolMsg = { role: 'tool', toolCallId: call.id, toolName: call.name, content: truncate(String(output)), isError }
+      const toolMsg = { role: 'tool', toolCallId: call.id, toolName: name, content: truncate(String(output)), isError }
+      if (thumb) toolMsg.thumb = thumb
       produced.push(toolMsg)
       p.emit('tool-result', { message: toolMsg })
     }
+    // Vision models get to actually look at what they built.
+    const last = screenshots[screenshots.length - 1]
+    if (last && ctx.vision && !p.signal.aborted) {
+      const review = {
+        role: 'user',
+        synthetic: true,
+        review: true,
+        content: `[Wicked Code] Screenshot of ${last.url || 'the page'} from browser_check. Look at it carefully: does this look like what my owner asked for? Check the layout, colours, text and that nothing is missing, blank or broken. Then check the console output above for errors. If anything is wrong, fix it and run browser_check again; if it is right, call show_preview and summarise.`,
+        images: [last.shot],
+      }
+      produced.push(review)
+      p.emit('nudge', { message: { ...review, images: undefined } })
+    }
   }
-  return produced
+  // Screenshots were only for the model's eyes during this run; don't store them in the chat.
+  return produced.map((m) => (m.review && m.images ? (({ images, ...rest }) => rest)(m) : m))
 }
 
-module.exports = { needsNudge, runAgent, resolvePath, buildSystemPrompt, toolsFor, IMPLEMENTATIONS, needsApproval, compactMessages, truncate }
+/** Only the newest screenshot is sent as an image (older ones would just fill the context). */
+function withLatestScreenshot(msgs) {
+  let lastShot = -1
+  msgs.forEach((m, i) => {
+    if (m.review && m.images) lastShot = i
+  })
+  return msgs.map((m, i) => (m.review && m.images && i !== lastShot ? (({ images, ...rest }) => ({ ...rest, content: rest.content + ' (older screenshot removed)' }))(m) : m))
+}
+
+module.exports = { withLatestScreenshot, needsNudge, runAgent, resolvePath, buildSystemPrompt, toolsFor, IMPLEMENTATIONS, needsApproval, compactMessages, truncate }

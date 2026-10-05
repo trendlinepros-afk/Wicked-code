@@ -14,6 +14,28 @@ contextBridge.exposeInMainWorld('wicked', {
   apiKeys: { set: invoke('apiKeys:set'), test: invoke('apiKeys:test') },
   dialog: { pickFolder: invoke('dialog:pickFolder') },
   shell: { openPath: invoke('shell:openPath') },
+  notes: {
+    open: invoke('notes:open'),
+    setContext: invoke('notes:setContext'),
+    getContext: invoke('notes:getContext'),
+    onContext: subscribe('notes:context'),
+    read: invoke('notes:read'),
+    write: invoke('notes:write'),
+    writeNow: (scope, id, text) => ipcRenderer.send('notes:writeNow', scope, id, text),
+    /** The window is closing: save now, then call done(). */
+    onFlush: (cb) => {
+      const listener = () => {
+        try {
+          cb()
+        } finally {
+          ipcRenderer.send('notes:flushed')
+        }
+      }
+      ipcRenderer.on('notes:flush', listener)
+      return () => ipcRenderer.removeListener('notes:flush', listener)
+    },
+  },
+  preview: { urlFor: invoke('preview:urlFor'), openExternal: invoke('preview:openExternal'), capture: invoke('preview:capture') },
   files: {
     // Full path of a dropped File (File.path no longer exists in sandboxed renderers).
     pathFor: (file) => webUtils.getPathForFile(file),

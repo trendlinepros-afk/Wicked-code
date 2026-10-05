@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { api, parseModelId, uid, type Attachment, type Message, type PermissionControl, type PermissionMode, type Mode, type ProcessInfo, type Session, type SessionMeta, type ToolCall } from '../lib/api'
 import { useApp } from '../lib/store'
 import { MessageList, ToolArgs, EmptyIcon, AttachmentChip } from './Messages'
@@ -8,6 +8,7 @@ import { NewCodeSessionDialog } from './NewCodeSession'
 import { SidebarUpdateButton } from './Updates'
 import { ToolSkillBanner } from './ToolSkillBanner'
 import { canSeeImages } from '../lib/catalog'
+import { PreviewPane } from './PreviewPane'
 
 interface RunState {
   runId: string
@@ -17,6 +18,8 @@ interface RunState {
   liveThinking: string
   approvals: { requestId: string; call: ToolCall }[]
   notices: string[]
+  /** last page shown in the preview panel during this run */
+  previewTarget?: string
 }
 
 const newSession = (mode: Mode, model: string, folders: string[]): Session => {
@@ -72,6 +75,16 @@ export function Workspace({
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  // Built-in preview panel (code sessions).
+  const [preview, setPreview] = useState<{ url: string; open: boolean; key: number } | null>(null)
+  const [previewWidth, setPreviewWidth] = useState(() => {
+    try {
+      return Number(localStorage.getItem('wicked.previewWidth')) || 560
+    } catch {
+      return 560
+    }
+  })
+  const [resizing, setResizing] = useState(false)
 
   const updateRun = (fn: (r: RunState) => RunState) => {
     if (!runRef.current) return
@@ -142,6 +155,11 @@ export function Workspace({
           case 'approval':
             updateRun((r) => ({ ...r, approvals: [...r.approvals, { requestId: e.requestId, call: e.call }] }))
             break
+          case 'preview':
+            updateRun((r) => ({ ...r, previewTarget: e.target }))
+            // Show (and refresh) what the agent is building, if its chat is the one on screen.
+            if (activeRef.current?.id === runRef.current.sessionId) setPreview((p) => ({ url: e.url, open: true, key: (p?.key ?? 0) + 1 }))
+            break
         }
       }),
     [settings.selectedModel],
@@ -164,6 +182,13 @@ export function Workspace({
       setDraftPermission(null)
       setActive(s)
       setError(null)
+      setPreview(null)
+      if (s.mode === 'code' && s.previewTarget && s.folders[0]) {
+        api()
+          .preview.urlFor(s.folders[0], s.previewTarget)
+          .then((url) => setPreview((p) => p ?? { url, open: false, key: 0 }))
+          .catch(() => {})
+      }
       refreshRepo(s)
       stickToBottom.current = true
     } catch (e) {
@@ -324,6 +349,7 @@ export function Workspace({
         folders: session.folders,
         sessionId: session.id,
         permissionMode: permissionOf(session),
+        vision: canSeeImages(modelId),
       })
     } catch (e) {
       failure = String((e as Error).message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
@@ -351,6 +377,7 @@ export function Workspace({
     let finished: Session = {
       ...session,
       permissionMode: latest?.permissionMode ?? session.permissionMode,
+      previewTarget: r.previewTarget ?? session.previewTarget,
       autoApprove: false,
       messages: [...session.messages, ...produced],
       updatedAt: new Date().toISOString(),
@@ -456,12 +483,56 @@ export function Workspace({
   }, [visible, permission, mode, onPermissionControl])
   useEffect(() => () => onPermissionControl(null), [onPermissionControl])
 
+  // The Notes window follows whichever chat / code session is on screen.
+  useEffect(() => {
+    if (!visible) return
+    api().notes.setContext(active ? { id: active.id, title: active.title, mode: active.mode } : null)
+  }, [visible, active?.id, active?.title, active?.mode])
+
   const runningHere = !!run && run.sessionId === active?.id
   const sessionProcs = procs.filter((p) => p.status === 'running' && p.owner === active?.id)
   const messages = active ? [...active.messages, ...(runningHere ? run!.produced : [])] : []
   const folders = active?.folders ?? []
   const needsFolder = mode === 'code' && !folders.length
   const modelBusy = modelState?.status === 'loading' || modelState?.status === 'unloading'
+
+  /** Pane-head button: show/hide the preview (defaults to index.html in the working folder). */
+  const togglePreview = async () => {
+    if (preview?.open) return setPreview({ ...preview, open: false })
+    if (preview) return setPreview({ ...preview, open: true, key: preview.key + 1 })
+    if (!folders[0]) return
+    try {
+      const url = await api().preview.urlFor(folders[0], active?.previewTarget || 'index.html')
+      setPreview({ url, open: true, key: 0 })
+    } catch (e) {
+      setError(String((e as Error).message || e))
+    }
+  }
+
+  /** Drag the divider between chat and preview. */
+  const startResize = (e: ReactMouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = previewWidth
+    let w = startW
+    setResizing(true)
+    const move = (ev: MouseEvent) => {
+      w = Math.min(Math.max(320, startW + (startX - ev.clientX)), window.innerWidth - 560)
+      setPreviewWidth(w)
+    }
+    const up = () => {
+      setResizing(false)
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      try {
+        localStorage.setItem('wicked.previewWidth', String(Math.round(w)))
+      } catch {
+        /* not saved */
+      }
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
 
   return (
     <div className="workspace" style={{ display: visible ? 'flex' : 'none' }}>
@@ -534,6 +605,9 @@ export function Workspace({
           ))}
         </div>
         <div className="sidebar-foot">
+          <button className="sidebar-settings" onClick={() => api().notes.open()} title="Open the Notes window (app-wide notes + notes for this session)">
+            <Icon name="pencil" size={15} /> Notes
+          </button>
           <button className="sidebar-settings" onClick={onOpenSettings} title="Settings">
             <Icon name="gear" size={15} /> Settings
           </button>
@@ -584,6 +658,15 @@ export function Workspace({
                 </button>
               </span>
             ))}
+            {active.mode === 'code' && folders[0] && (
+              <button
+                className={`btn btn-ghost btn-sm ${preview?.open ? 'active' : ''}`}
+                onClick={togglePreview}
+                title="Show what the agent built in the built-in preview panel"
+              >
+                <Icon name="monitor" size={14} /> Preview
+              </button>
+            )}
             {active.notePath && (
               <button className="btn btn-ghost btn-sm" onClick={() => api().shell.openPath(active.notePath!)} title="Open the Markdown note in your vault">
                 <Icon name="book" size={14} /> Open note
@@ -748,6 +831,24 @@ export function Workspace({
         </div>
       </section>
 
+      {mode === 'code' && active && preview?.open && (
+        <>
+          <div className={`preview-divider ${resizing ? 'dragging' : ''}`} onMouseDown={startResize} title="Drag to resize" />
+          <PreviewPane
+            url={preview.url}
+            reloadKey={preview.key}
+            width={previewWidth}
+            resizing={resizing}
+            onReload={() => setPreview({ ...preview, key: preview.key + 1 })}
+            onClose={() => setPreview({ ...preview, open: false })}
+            onScreenshot={(att) => {
+              setPendingFiles((cur) => [...cur, att])
+              inputRef.current?.focus()
+            }}
+          />
+        </>
+      )}
+
       {showNewCode && (
         <NewCodeSessionDialog
           onCancel={() => setShowNewCode(false)}
@@ -757,6 +858,7 @@ export function Workspace({
           }}
           onDone={({ folder, github }) => {
             setShowNewCode(false)
+            setPreview(null)
             const s = newSession('code', settings.selectedModel || '', [folder])
             s.github = github ? { fullName: github.fullName, branch: github.branch, url: github.url } : null
             if (github) s.title = `${github.repo} · ${github.branch ?? ''}`.trim()

@@ -1,5 +1,6 @@
 // Electron main process: window, IPC, model lifecycle, agent runs.
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, session, nativeTheme, Menu, nativeImage } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, session, nativeTheme, Menu, nativeImage, protocol, net } = require('electron')
+const { pathToFileURL } = require('url')
 const path = require('path')
 const fs = require('fs')
 const { Config, PROVIDERS } = require('./config.cjs')
@@ -16,11 +17,19 @@ const { planGpuLayers } = require('./vramBudget.cjs')
 const { ProcessManager } = require('./processes.cjs')
 const { GitHub, repoInfo, slugify } = require('./github.cjs')
 const { OllamaLauncher } = require('./ollamaLauncher.cjs')
+const { PreviewRoots, SCHEME: PREVIEW_SCHEME } = require('./preview.cjs')
+const { NotesStore } = require('./notes.cjs')
 const os = require('os')
 const { initLog, log, logFile } = require('./log.cjs')
 
 // Pin the settings folder so it never changes between versions; app updates don't touch it.
 app.setPath('userData', path.join(app.getPath('appData'), 'Wicked Code'))
+
+// Built-in preview panel: the working folder is served on wicked-preview://<token>/… (see preview.cjs).
+protocol.registerSchemesAsPrivileged([
+  { scheme: PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+])
+const previews = new PreviewRoots()
 
 let win = null
 let config
@@ -32,6 +41,9 @@ let processes
 let github
 let launcher
 let quitting = false
+let notesWin = null
+let notes
+let notesContext = null // { id, title, mode } of the session open in the main window
 const runs = new Map() // runId -> AbortController
 const titleRuns = new Set() // AbortControllers for chat-naming requests
 const approvals = new Map() // requestId -> resolve
@@ -95,8 +107,37 @@ function createWindow() {
   })
   // Right-click menu: spelling suggestions + "Add to dictionary" for misspelled words, and the usual
   // Cut / Copy / Paste / Select all.
-  win.webContents.on('context-menu', (_e, params) => {
-    const wc = win.webContents
+  attachContextMenu(win)
+  // Spell-check in the user's language (Windows/macOS use the OS spell checker automatically).
+  if (process.platform !== 'darwin') {
+    const langs = session.defaultSession.availableSpellCheckerLanguages
+    const want = [app.getLocale(), 'en-US'].filter((l, i, a) => langs.includes(l) && a.indexOf(l) === i)
+    if (want.length) session.defaultSession.setSpellCheckerLanguages(want)
+  }
+  win.on('closed', () => notesWin?.close())
+  limitNavigation(win)
+  if (process.env.VITE_DEV_SERVER_URL) win.loadURL(process.env.VITE_DEV_SERVER_URL)
+  else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
+}
+
+/** Open external links in the user's browser rather than inside the app. */
+function limitNavigation(w) {
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  w.webContents.on('will-navigate', (e, url) => {
+    if (url !== w.webContents.getURL()) {
+      e.preventDefault()
+      if (/^https?:/.test(url)) shell.openExternal(url)
+    }
+  })
+}
+
+/** Right-click menu with spelling suggestions and Cut / Copy / Paste. */
+function attachContextMenu(w) {
+  w.webContents.on('context-menu', (_e, params) => {
+    const wc = w.webContents
     const items = []
     if (params.misspelledWord) {
       const suggestions = params.dictionarySuggestions.slice(0, 6)
@@ -127,28 +168,47 @@ function createWindow() {
       if (items.length) items.push({ type: 'separator' })
       items.push({ label: 'Open link in browser', click: () => shell.openExternal(params.linkURL) })
     }
-    if (items.length) Menu.buildFromTemplate(items).popup({ window: win })
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: w })
   })
-  // Spell-check in the user's language (Windows/macOS use the OS spell checker automatically).
-  if (process.platform !== 'darwin') {
-    const langs = session.defaultSession.availableSpellCheckerLanguages
-    const want = [app.getLocale(), 'en-US'].filter((l, i, a) => langs.includes(l) && a.indexOf(l) === i)
-    if (want.length) session.defaultSession.setSpellCheckerLanguages(want)
-  }
+}
 
-  // Open external links in the user's browser rather than inside the app.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/.test(url)) shell.openExternal(url)
-    return { action: 'deny' }
+/** The separate Notes window (app-wide notes + notes for the session open in the main window). */
+function openNotesWindow() {
+  if (notesWin && !notesWin.isDestroyed()) {
+    if (notesWin.isMinimized()) notesWin.restore()
+    notesWin.focus()
+    return
+  }
+  const b = win?.getBounds()
+  notesWin = new BrowserWindow({
+    width: 460,
+    height: 620,
+    minWidth: 320,
+    minHeight: 300,
+    x: b ? Math.max(0, b.x + b.width - 480) : undefined,
+    y: b ? b.y + 60 : undefined,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f0e13' : '#f7f6fa',
+    title: 'Wicked Code — Notes',
+    autoHideMenuBar: true,
+    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
-  win.webContents.on('will-navigate', (e, url) => {
-    if (url !== win.webContents.getURL()) {
-      e.preventDefault()
-      if (/^https?:/.test(url)) shell.openExternal(url)
-    }
+  attachContextMenu(notesWin)
+  limitNavigation(notesWin)
+  // Closing: let the window save the last keystrokes first (it answers with notes:flushed).
+  let flushed = false
+  notesWin.on('close', (e) => {
+    if (flushed) return
+    e.preventDefault()
+    flushed = true
+    const w = notesWin
+    const done = () => w && !w.isDestroyed() && w.destroy()
+    ipcMain.once('notes:flushed', done)
+    setTimeout(done, 1500)
+    w.webContents.send('notes:flush')
   })
-  if (process.env.VITE_DEV_SERVER_URL) win.loadURL(process.env.VITE_DEV_SERVER_URL)
-  else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
+  notesWin.on('closed', () => (notesWin = null))
+  if (process.env.VITE_DEV_SERVER_URL) notesWin.loadURL(process.env.VITE_DEV_SERVER_URL + '#notes')
+  else notesWin.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { hash: 'notes' })
 }
 
 /**
@@ -191,7 +251,8 @@ async function browserCheck({ url, waitMs = 1500, script }) {
         .catch((e) => 'Script error: ' + String(e.message || e))
       await new Promise((r) => setTimeout(r, 300))
     }
-    return [
+    const shot = await screenshotOf(check.webContents)
+    const text = [
       loadError ? `LOAD ERROR: ${loadError}` : `Loaded ${page.url}`,
       `Title: ${page.title || '(none)'} · ${page.elements} elements`,
       scriptResult !== null ? `\n--- script result ---\n${scriptResult}` : '',
@@ -199,8 +260,30 @@ async function browserCheck({ url, waitMs = 1500, script }) {
       `\n--- failed requests (${failed.length}) ---\n${failed.join('\n') || '(none)'}`,
       `\n--- visible text ---\n${page.text || '(page is blank)'}`,
     ].join('\n')
+    return { text, ...shot }
   } finally {
     check.destroy()
+  }
+}
+
+/**
+ * Screenshot a page: a JPEG for the model to look at (≤1024 px wide) and a smaller thumbnail for the chat.
+ * @returns {{ screenshot?: { mime: string, data: string }, thumb?: string }}
+ */
+async function screenshotOf(wc) {
+  try {
+    const img = await wc.capturePage()
+    if (img.isEmpty()) return {}
+    const { width } = img.getSize()
+    const forModel = width > 1024 ? img.resize({ width: 1024, quality: 'good' }) : img
+    const thumb = width > 560 ? img.resize({ width: 560, quality: 'good' }) : img
+    return {
+      screenshot: { mime: 'image/jpeg', data: forModel.toJPEG(80).toString('base64') },
+      thumb: 'data:image/jpeg;base64,' + thumb.toJPEG(70).toString('base64'),
+    }
+  } catch (e) {
+    log('preview', 'screenshot failed', { message: String(e.message || e) })
+    return {}
   }
 }
 
@@ -270,6 +353,42 @@ function registerIpc() {
     return r.canceled ? null : r.filePaths[0]
   })
   handle('shell:openPath', (p) => shell.openPath(p))
+
+  // ----- notes window -----
+  handle('notes:open', () => openNotesWindow())
+  handle('notes:setContext', (ctx) => {
+    notesContext = ctx && ctx.id ? { id: String(ctx.id), title: String(ctx.title || ''), mode: ctx.mode === 'code' ? 'code' : 'chat' } : null
+    if (notesWin && !notesWin.isDestroyed()) notesWin.webContents.send('notes:context', notesContext)
+  })
+  handle('notes:getContext', () => notesContext)
+  handle('notes:read', (scope, id) => notes.read(scope, id))
+  handle('notes:write', (scope, id, text) => notes.write(scope, id, text))
+  // Fire-and-forget save used while the notes window is closing.
+  ipcMain.on('notes:writeNow', (_e, scope, id, text) => {
+    try {
+      notes.write(scope, id, text)
+    } catch (e) {
+      log('notes', 'save on close failed', { message: String(e.message || e) })
+    }
+  })
+
+  // ----- built-in preview panel -----
+  handle('preview:urlFor', (folder, target) => previews.urlFor(folder, target))
+  /** Open what the preview shows in the user's normal browser. */
+  handle('preview:openExternal', async (url) => {
+    const file = String(url).startsWith(`${PREVIEW_SCHEME}:`) ? previews.fileFor(url) : null
+    if (file) {
+      const err = await shell.openPath(file)
+      if (err) throw new Error(err)
+    } else if (/^https?:/i.test(url)) await shell.openExternal(url)
+  })
+  /** Screenshot the preview panel (rect in window coordinates) and attach it like a pasted image. */
+  handle('preview:capture', async (rect) => {
+    const r = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) }
+    const img = await win.webContents.capturePage(r)
+    if (img.isEmpty()) throw new Error('Nothing to capture yet.')
+    return saveImageBytes(img.toPNG(), 'image/png')
+  })
 
   // ----- attachments (drag & drop / 📎 / paste) -----
   /** Extract + add small thumbnails for images (shown in the composer and chat). */
@@ -520,7 +639,7 @@ function registerIpc() {
   })
 
   // ----- agent -----
-  handle('agent:run', async ({ runId, mode, modelId, history, folders, sessionId, autoApprove, permissionMode }) => {
+  handle('agent:run', async ({ runId, mode, modelId, history, folders, sessionId, autoApprove, permissionMode, vision }) => {
     const { provider, model } = parseModelId(modelId)
     const ac = new AbortController()
     runs.set(runId, ac)
@@ -563,16 +682,16 @@ function registerIpc() {
         owner: sessionId,
         processes: mode === 'code' ? processes : null,
         browserCheck: mode === 'code' ? browserCheck : null,
-        openForUser:
-          mode === 'code'
-            ? async ({ path: file, url }) => {
-                log('agent', 'open for user', { file, url })
-                if (file) {
-                  const err = await shell.openPath(file)
-                  if (err) throw new Error(err)
-                } else await shell.openExternal(url)
+        // Shows a page in the app's own preview panel (next to the chat).
+        showPreview:
+          mode === 'code' && folders?.[0]
+            ? (target) => {
+                const url = previews.urlFor(folders[0], target)
+                emit('preview', { target, url })
+                return url
               }
             : null,
+        vision: vision !== false,
         github: ghTools,
         env: github.authEnv(),
         maxSteps: Number(config.get('maxAgentSteps')) || 100,
@@ -649,6 +768,7 @@ app.whenReady().then(() => {
   applyTheme()
   ollama = new Ollama(() => config.get('ollamaUrl'))
   vault = new Vault(() => config.get('vaultPath'))
+  notes = new NotesStore(() => config.get('vaultPath'), path.join(app.getPath('userData'), 'notes'))
   models = new ModelManager({
     ollama,
     runOptions: ollamaRunOptions,
@@ -682,12 +802,22 @@ app.whenReady().then(() => {
   launcher.on('state', (s) => send('ollama:launcher', s))
   if (config.get('autoStartOllama') !== false) launcher.ensure()
 
-  if (app.isPackaged) {
+  protocol.handle(PREVIEW_SCHEME, async (req) => {
+    const file = previews.fileFor(req.url)
+    if (!file || !fs.existsSync(file)) return new Response(`Not found: ${new URL(req.url).pathname}`, { status: 404, headers: { 'content-type': 'text/plain' } })
+    return net.fetch(pathToFileURL(file).toString())
+  })
+
+  if (app.isPackaged || process.env.WICKED_FORCE_CSP) {
     session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
+      // Only the app's own pages; previewed pages keep their own scripts and styles.
+      if (!details.url.startsWith('file:')) return cb({})
       cb({
         responseHeaders: {
           ...details.responseHeaders,
-          'Content-Security-Policy': ["default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'"],
+          'Content-Security-Policy': [
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; frame-src 'self' wicked-preview: http://localhost:* http://127.0.0.1:*",
+          ],
         },
       })
     })
