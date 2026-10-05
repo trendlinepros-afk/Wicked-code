@@ -335,3 +335,15 @@ export function toolSkill(modelId: string): 'good' | 'poor' | 'unknown' {
   if (/coder:?(1\.5|3|7)b|gemma|deepseek-r1|phi|llava|vision|vl[:\b]|tinyllama|:1b|:3b/i.test(name)) return 'poor'
   return 'unknown'
 }
+
+/** Can this model look at images? (catalog "vision" tag, cloud models, or a vision-ish name) */
+export function canSeeImages(modelId: string): boolean {
+  const i = modelId.indexOf(':')
+  const provider = i < 0 ? 'ollama' : modelId.slice(0, i)
+  if (provider === 'anthropic' || provider === 'gemini' || provider === 'grok') return true
+  if (provider === 'deepseek') return false
+  const name = modelId.slice(i + 1)
+  const info = catalogInfo(name)
+  if (info) return info.tags.includes('vision')
+  return /vl\b|vl:|vision|llava|gemma3|minicpm-v|moondream|qwen3\.[5-9]|mistral-small3|granite3\.2-vision|bakllava/i.test(name)
+}

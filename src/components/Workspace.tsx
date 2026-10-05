@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
 import { api, parseModelId, uid, type Attachment, type Message, type Mode, type ProcessInfo, type Session, type SessionMeta, type ToolCall } from '../lib/api'
 import { useApp } from '../lib/store'
 import { MessageList, ToolArgs, EmptyIcon, AttachmentChip } from './Messages'
@@ -7,6 +7,7 @@ import { ConfirmDialog, Icon, Spinner, basename } from './ui'
 import { NewCodeSessionDialog } from './NewCodeSession'
 import { SidebarUpdateButton } from './Updates'
 import { ToolSkillBanner } from './ToolSkillBanner'
+import { canSeeImages } from '../lib/catalog'
 
 interface RunState {
   runId: string
@@ -229,6 +230,36 @@ export function Workspace({
     const picked = await api().files.pick()
     if (picked.length) setPendingFiles((cur) => [...cur, ...picked.filter((p) => !cur.some((c) => c.path === p.path))])
     inputRef.current?.focus()
+  }
+
+  /** Ctrl+V: screenshots (saved into the vault) and files copied in Explorer/Finder become attachments. */
+  const onPaste = async (e: ClipboardEvent<HTMLElement>) => {
+    const files = Array.from(e.clipboardData.files)
+    if (needsFolder) return
+    if (!files.length) {
+      // Some screenshot tools put only raw image data on the clipboard (no file, no text).
+      if (e.clipboardData.types.some((t) => t.startsWith('text/'))) return // plain text paste
+      const key = `paste-${Date.now()}`
+      setPendingFiles((cur) => [...cur, { name: 'Pasted image', path: key, ext: '', size: 0, kind: 'image', reading: true }])
+      const att = await api().files.pasteClipboardImage()
+      setPendingFiles((cur) => (att ? cur.map((x) => (x.path === key ? att : x)) : cur.filter((x) => x.path !== key)))
+      return
+    }
+    e.preventDefault()
+    const withPath = files.map((f) => ({ f, p: api().files.pathFor(f) }))
+    const onDisk = withPath.filter((x) => x.p).map((x) => x.p)
+    if (onDisk.length) attachPaths(onDisk)
+    for (const { f } of withPath.filter((x) => !x.p && x.f.type.startsWith('image/'))) {
+      const key = `paste-${Date.now()}-${Math.random()}`
+      setPendingFiles((cur) => [...cur, { name: 'Pasted image', path: key, ext: '', size: f.size, kind: 'image', reading: true }])
+      try {
+        const att = await api().files.savePasted(new Uint8Array(await f.arrayBuffer()), f.type)
+        setPendingFiles((cur) => cur.map((x) => (x.path === key ? att : x)))
+      } catch (err) {
+        setPendingFiles((cur) => cur.map((x) => (x.path === key ? { ...x, reading: false, error: String((err as Error).message || err) } : x)))
+      }
+    }
+    api().model.touch()
   }
 
   const onDrop = (e: DragEvent<HTMLElement>) => {
@@ -604,12 +635,18 @@ export function Workspace({
 
         <div className="composer-wrap">
           {mode === 'code' && !needsFolder && <ToolSkillBanner onManageModels={onManageModels} />}
-          <div className={`composer ${needsFolder ? 'disabled' : ''}`}>
+          <div className={`composer ${needsFolder ? 'disabled' : ''}`} onPaste={onPaste}>
             {pendingFiles.length > 0 && (
               <div className="composer-files">
                 {pendingFiles.map((f) => (
                   <AttachmentChip key={f.path} att={f} reading={f.reading} onRemove={() => setPendingFiles((cur) => cur.filter((x) => x.path !== f.path))} />
                 ))}
+              </div>
+            )}
+            {pendingFiles.some((f) => f.kind === 'image' && !f.error) && settings.selectedModel && !canSeeImages(settings.selectedModel) && (
+              <div className="vision-warn">
+                <Icon name="image" size={13} /> {parseModelId(settings.selectedModel).model} can’t look at images — pick a vision model (e.g. qwen2.5vl, Qwen 3.8, Gemma 3) in the
+                model picker.
               </div>
             )}
             <div className="composer-folders">

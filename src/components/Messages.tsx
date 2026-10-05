@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Attachment, Message, ToolCall } from '../lib/api'
+import { api, type Attachment, type Message, type ToolCall } from '../lib/api'
 import { Markdown } from './Markdown'
 import { Icon, Spinner } from './ui'
 
@@ -16,7 +16,11 @@ export function AttachmentChip({ att, reading, onRemove }: { att: Attachment; re
           .join(' · ')
   return (
     <span className={`att-chip ${att.error ? 'error' : ''} ${att.kind}`} title={`${att.path}${att.error ? `\n${att.error}` : ''}`}>
-      <span className="att-icon">{reading ? <Spinner /> : <Icon name={att.kind === 'image' ? 'image' : 'file'} size={15} />}</span>
+      {att.thumb ? (
+        <img className="att-thumb" src={att.thumb} alt="" />
+      ) : (
+        <span className="att-icon">{reading ? <Spinner /> : <Icon name={att.kind === 'image' ? 'image' : 'file'} size={15} />}</span>
+      )}
       <span className="att-text">
         <span className="att-name">{att.name}</span>
         <span className="att-detail">{detail}</span>
@@ -138,11 +142,24 @@ export function MessageList({
         if (m.role === 'user') {
           return (
             <div key={i} className="msg user">
-              {!!m.attachments?.length && (
+              {m.attachments?.some((a) => a.thumb) && (
+                <div className="msg-images">
+                  {m.attachments
+                    .filter((a) => a.thumb)
+                    .map((a) => (
+                      <button key={a.path} className="msg-image" onClick={() => api().shell.openPath(a.path)} title={`${a.name} — click to open`}>
+                        <img src={a.thumb} alt={a.name} />
+                      </button>
+                    ))}
+                </div>
+              )}
+              {m.attachments?.some((a) => !a.thumb) && (
                 <div className="msg-files">
-                  {m.attachments.map((a) => (
-                    <AttachmentChip key={a.path} att={a} />
-                  ))}
+                  {m.attachments
+                    .filter((a) => !a.thumb)
+                    .map((a) => (
+                      <AttachmentChip key={a.path} att={a} />
+                    ))}
                 </div>
               )}
               <div className="bubble">{m.content}</div>

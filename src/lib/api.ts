@@ -44,6 +44,10 @@ export interface Attachment {
   pages?: number
   chars?: number
   error?: string
+  /** small data-URL preview for images */
+  thumb?: string
+  width?: number
+  height?: number
 }
 
 export interface Message {
@@ -211,6 +215,8 @@ export interface WickedApi {
     pathFor(file: File): string
     extract(paths: string[]): Promise<Attachment[]>
     pick(): Promise<Attachment[]>
+    savePasted(bytes: Uint8Array, mime: string): Promise<Attachment>
+    pasteClipboardImage(): Promise<Attachment | null>
   }
   vault: {
     inspect(p: string): Promise<{ exists: boolean; isObsidian: boolean }>

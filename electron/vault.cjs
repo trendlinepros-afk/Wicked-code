@@ -80,7 +80,13 @@ function toMarkdown(session) {
       body.push('> [!note] Wicked Code reminded the model to do the work with tools', '')
     } else if (m.role === 'user') {
       body.push('## You', '')
-      if (m.attachments?.length) body.push(...m.attachments.map((a) => `> 📎 \`${a.name}\`${a.error ? ' (could not be read)' : ''}`), '')
+      if (m.attachments?.length) {
+        for (const a of m.attachments) {
+          const inVault = session.vaultPath && a.path.startsWith(session.vaultPath) && a.kind === 'image'
+          body.push(inVault ? `![[${path.basename(a.path)}]]` : `> 📎 \`${a.name}\`${a.error ? ' (could not be read)' : ''}`)
+        }
+        body.push('')
+      }
       body.push(m.content, '')
     } else if (m.role === 'assistant') {
       if (m.content?.trim()) body.push(`## Assistant${m.model ? ` (${m.model})` : ''}`, '', m.content, '')
@@ -146,7 +152,7 @@ class Vault {
       await fsp.rename(session.notePath, notePath).catch(() => {})
     }
     const saved = { ...session, notePath }
-    await fsp.writeFile(notePath, toMarkdown(saved), 'utf8')
+    await fsp.writeFile(notePath, toMarkdown({ ...saved, vaultPath: this.getPath() }), 'utf8')
     const jsonPath = path.join(d.data, safeName(session.id) + '.json')
     await fsp.writeFile(jsonPath + '.tmp', JSON.stringify(saved, null, 1), 'utf8')
     await fsp.rename(jsonPath + '.tmp', jsonPath)

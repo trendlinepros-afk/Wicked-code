@@ -1,6 +1,7 @@
 // Electron main process: window, IPC, model lifecycle, agent runs.
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, session, nativeTheme, Menu } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, session, nativeTheme, Menu, nativeImage } = require('electron')
 const path = require('path')
+const fs = require('fs')
 const { Config, PROVIDERS } = require('./config.cjs')
 const { Ollama } = require('./ollama.cjs')
 const { ModelManager, parseModelId } = require('./modelManager.cjs')
@@ -247,10 +248,60 @@ function registerIpc() {
   })
   handle('shell:openPath', (p) => shell.openPath(p))
 
-  // ----- attachments (drag & drop / 📎) -----
+  // ----- attachments (drag & drop / 📎 / paste) -----
+  /** Extract + add small thumbnails for images (shown in the composer and chat). */
+  const extractWithThumbs = async (paths) => {
+    const out = await extractFiles(paths)
+    for (const a of out) {
+      if (a.kind !== 'image' || a.error) continue
+      try {
+        const img = nativeImage.createFromPath(a.path)
+        if (!img.isEmpty()) {
+          const { width, height } = img.getSize()
+          const thumb = height > 240 ? img.resize({ height: 240, quality: 'good' }) : img
+          a.thumb = 'data:image/jpeg;base64,' + thumb.toJPEG(80).toString('base64') // small JPEG keeps chat files light
+          a.width = width
+          a.height = height
+        }
+      } catch {
+        /* no thumbnail */
+      }
+    }
+    return out
+  }
+  // Pasted screenshots have no file on disk: save them into the vault (so the Obsidian note can show them).
+  // Fallback when the paste event carries no file: read an image straight from the system clipboard.
+  handle('files:pasteClipboardImage', async () => {
+    const { clipboard } = require('electron')
+    try {
+      const items = typeof clipboard.read === 'function' ? await clipboard.read() : []
+      for (const item of Array.isArray(items) ? items : []) {
+        const type = (item.types || []).find((t) => t.startsWith('image/'))
+        if (!type) continue
+        const blob = await item.getType(type)
+        return saveImageBytes(new Uint8Array(await blob.arrayBuffer()), type)
+      }
+    } catch (e) {
+      log('files', 'clipboard image read failed', { message: String(e.message || e) })
+    }
+    return null
+  })
+  handle('files:savePasted', (bytes, mime) => saveImageBytes(bytes, mime))
+  async function saveImageBytes(bytes, mime) {
+    const ext = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif', 'image/bmp': '.bmp' }[mime] || '.png'
+    const vaultPath = config.get('vaultPath')
+    const dir = vaultPath ? path.join(vaultPath, 'Wicked Code', 'Attachments') : path.join(app.getPath('userData'), 'pastes')
+    fs.mkdirSync(dir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').replace(/\..+/, '')
+    let file = path.join(dir, `Screenshot ${stamp}${ext}`)
+    for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, `Screenshot ${stamp} (${n})${ext}`)
+    fs.writeFileSync(file, Buffer.from(bytes))
+    log('files', 'pasted image saved', { file, bytes: bytes.length })
+    return (await extractWithThumbs([file]))[0]
+  }
   handle('files:extract', async (paths) => {
     const started = Date.now()
-    const out = await extractFiles((paths || []).filter(Boolean))
+    const out = await extractWithThumbs((paths || []).filter(Boolean))
     log('files', 'extracted', { files: out.map((f) => ({ ext: f.ext, size: f.size, chars: f.chars, error: f.error })), ms: Date.now() - started })
     return out
   })
@@ -263,7 +314,7 @@ function registerIpc() {
         { name: 'All files', extensions: ['*'] },
       ],
     })
-    return r.canceled ? [] : extractFiles(r.filePaths)
+    return r.canceled ? [] : extractWithThumbs(r.filePaths)
   })
 
   // ----- vault -----

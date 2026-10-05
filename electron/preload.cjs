@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('wicked', {
     pathFor: (file) => webUtils.getPathForFile(file),
     extract: invoke('files:extract'),
     pick: invoke('files:pick'),
+    savePasted: invoke('files:savePasted'),
+    pasteClipboardImage: invoke('files:pasteClipboardImage'),
   },
   vault: { inspect: invoke('vault:inspect'), set: invoke('vault:set'), openMemory: invoke('vault:openMemory') },
   sessions: {
