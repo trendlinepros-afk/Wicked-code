@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api, type Settings } from '../lib/api'
 import { Icon, Spinner } from './ui'
+import { VersionTag } from './Updates'
 
 /** First-run screen: the user must pick an Obsidian vault before using the app. */
 export function Onboarding({ onDone, current }: { onDone(s: Settings): void; current?: string | null }) {
@@ -64,6 +65,7 @@ export function Onboarding({ onDone, current }: { onDone(s: Settings): void; cur
           {saving ? <Spinner /> : null} Start using Wicked Code
         </button>
       </div>
+      <VersionTag />
     </div>
   )
 }

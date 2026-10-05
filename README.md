@@ -23,6 +23,10 @@ A simplified, local-first take on the Claude Code desktop app. It has two worksp
   - **API Keys.** Add, test, replace or remove keys for Anthropic, Gemini, DeepSeek and Grok. Keys are encrypted with the OS keychain via Electron `safeStorage`.
   - **Local Model Management.** Lists your downloaded models. Each one shows strengths and weaknesses, the VRAM it needs, a **1–5 star rating** for how well it should run on *your* hardware (no stars = won't run), your own **notes**, and a red **Delete** button that asks for Yes/No confirmation. Below that is a **model store** of popular models. Each **Download** asks for Yes/No confirmation and shows live progress. **Qwen 3.8 27B** (`qwen3.8:27b`) is the featured default model.
 
+- **Light / dark mode.** Settings → General → Appearance has *Use system*, *Light* and *Dark*. *Use system* follows your OS setting live.
+- **Updates.** Settings → General → **Check for updates** looks for a newer release on GitHub and downloads it in the background (progress also shows in the bottom status bar). When the download finishes, a popup offers **Install & restart** or **I'll do this later**. If you choose later, the update installs the next time you close the app.
+- **Version number** is shown at the very bottom left of the window.
+
 ### How the star rating works
 
 Each model's memory need (from the catalog, or estimated from its file size) is compared with your GPU's VRAM:
@@ -51,6 +55,20 @@ Build an installer:
 ```bash
 npm run dist:win     # or dist:mac / dist:linux → ./release
 ```
+
+### Publishing updates
+
+Updates are served from this repo's GitHub Releases by `electron-updater`. To ship a new version:
+
+```bash
+npm version patch          # bumps package.json version and creates a vX.Y.Z tag
+git push --follow-tags     # the Release workflow builds Windows/macOS/Linux installers and publishes them
+```
+
+Installed copies will see the new version when you click **Check for updates**. Notes:
+- The repository must be **public**, or the app can't download private release assets.
+- macOS auto-update requires the app to be code-signed.
+- In dev mode (`npm run dev`) the button reports that updates only work in the installed app.
 
 Other scripts: `npm test` runs the main-process unit tests and `npm run typecheck` runs TypeScript.
 

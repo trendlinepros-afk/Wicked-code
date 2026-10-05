@@ -240,3 +240,53 @@ test('config stores api keys encrypted and hides them from the renderer', () => 
   assert.deepStrictEqual(pub.apiKeys.anthropic, { set: true, hint: '…1234' })
   assert.ok(!JSON.stringify(pub).includes('secret'))
 })
+
+test('updater: check → auto-download → downloaded → install', async () => {
+  const { Updater } = require('./updater.cjs')
+  const { EventEmitter } = require('events')
+  const au = new EventEmitter()
+  let installed = null
+  au.checkForUpdates = async () => {
+    au.emit('checking-for-update')
+    au.emit('update-available', { version: '0.2.0' })
+  }
+  au.downloadUpdate = async () => {
+    au.emit('download-progress', { percent: 42.4 })
+    au.emit('update-downloaded', { version: '0.2.0' })
+  }
+  au.quitAndInstall = (silent, runAfter) => (installed = { silent, runAfter })
+  const u = new Updater({ supported: true, currentVersion: '0.1.0', getAutoUpdater: () => au })
+  const seen = []
+  u.on('status', (s) => seen.push(s.status))
+  assert.strictEqual(u.install(), false) // nothing downloaded yet
+  await u.check()
+  await new Promise((r) => setImmediate(r))
+  assert.strictEqual(au.autoDownload, false)
+  assert.strictEqual(au.autoInstallOnAppQuit, true) // "later" installs on next quit
+  assert.deepStrictEqual(seen, ['checking', 'checking', 'downloading', 'downloading', 'downloaded'])
+  assert.strictEqual(u.state.version, '0.2.0')
+  // Checking again after download re-emits so the install popup reappears.
+  await u.check()
+  assert.strictEqual(seen.at(-1), 'downloaded')
+  assert.strictEqual(u.install(), true)
+  await new Promise((r) => setImmediate(r))
+  assert.deepStrictEqual(installed, { silent: false, runAfter: true })
+})
+
+test('updater: no update, errors, and dev mode', async () => {
+  const { Updater } = require('./updater.cjs')
+  const { EventEmitter } = require('events')
+  const dev = new Updater({ supported: false, currentVersion: '0.1.0', getAutoUpdater: () => assert.fail('must not load in dev') })
+  assert.strictEqual((await dev.check()).status, 'unsupported')
+
+  const au = new EventEmitter()
+  au.checkForUpdates = async () => au.emit('update-not-available', {})
+  const u = new Updater({ supported: true, currentVersion: '0.1.0', getAutoUpdater: () => au })
+  assert.strictEqual((await u.check()).status, 'none')
+  au.checkForUpdates = async () => {
+    throw new Error('net down')
+  }
+  const s = await u.check()
+  assert.strictEqual(s.status, 'error')
+  assert.strictEqual(s.error, 'net down')
+})

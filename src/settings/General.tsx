@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { api, type PermissionMode, type Settings } from '../lib/api'
+import { api, type PermissionMode, type Settings, type Theme } from '../lib/api'
 import { useApp } from '../lib/store'
 import { Icon } from '../components/ui'
+import { UpdatesCard } from '../components/Updates'
 
 export function General() {
   const { settings, setSettings, ollamaRunning, refreshModels } = useApp()
@@ -21,6 +22,26 @@ export function General() {
   return (
     <div className="settings-page">
       <h2>General</h2>
+
+      <UpdatesCard />
+
+      <section className="card">
+        <h3>Appearance</h3>
+        <div className="segmented" role="radiogroup" aria-label="Theme">
+          {(
+            [
+              ['system', 'Use system'],
+              ['light', 'Light'],
+              ['dark', 'Dark'],
+            ] as [Theme, string][]
+          ).map(([v, label]) => (
+            <button key={v} role="radio" aria-checked={settings.theme === v} className={settings.theme === v ? 'active' : ''} onClick={() => set('theme', v)}>
+              <Icon name={v === 'system' ? 'monitor' : v === 'light' ? 'sun' : 'moon'} size={15} /> {label}
+            </button>
+          ))}
+        </div>
+        <p className="muted small">“Use system” follows your operating system’s light/dark setting automatically.</p>
+      </section>
 
       <section className="card">
         <h3>Obsidian vault</h3>

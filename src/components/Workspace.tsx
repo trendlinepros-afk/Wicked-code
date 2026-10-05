@@ -266,9 +266,6 @@ export function Workspace({ mode, visible, onManageModels }: { mode: Mode; visib
             </div>
           ))}
         </div>
-        <div className="sidebar-foot muted small" title={settings.vaultPath || ''}>
-          <Icon name="book" size={13} /> Saving to {basename(settings.vaultPath || '')}
-        </div>
       </aside>
 
       <section className="main-pane">

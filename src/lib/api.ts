@@ -4,6 +4,7 @@ export type Provider = 'ollama' | 'anthropic' | 'gemini' | 'deepseek' | 'grok'
 export type CloudProvider = Exclude<Provider, 'ollama'>
 export type Mode = 'chat' | 'code'
 export type PermissionMode = 'ask' | 'auto-edits' | 'auto-all'
+export type Theme = 'system' | 'light' | 'dark'
 
 export interface Settings {
   vaultPath: string | null
@@ -13,6 +14,7 @@ export interface Settings {
   selectedModel: string | null
   permissionMode: PermissionMode
   useVaultMemory: boolean
+  theme: Theme
   modelNotes: Record<string, string>
   apiKeys: Record<CloudProvider, { set: boolean; hint: string }>
 }
@@ -105,6 +107,22 @@ export type AgentEvent =
 
 type Unsub = () => void
 
+export type UpdateStatus = 'idle' | 'checking' | 'none' | 'downloading' | 'downloaded' | 'error' | 'unsupported'
+
+export interface UpdateState {
+  status: UpdateStatus
+  currentVersion: string
+  version: string | null
+  percent: number
+  error: string | null
+}
+
+export interface AppInfo {
+  version: string
+  packaged: boolean
+  platform: string
+}
+
 export interface WickedApi {
   platform: string
   settings: {
@@ -147,6 +165,13 @@ export interface WickedApi {
     onState(cb: (s: ModelState) => void): Unsub
   }
   gpu: { stats(): Promise<GpuStats> }
+  app: { info(): Promise<AppInfo> }
+  updater: {
+    state(): Promise<UpdateState>
+    check(): Promise<UpdateState>
+    install(): Promise<boolean>
+    onStatus(cb: (s: UpdateState) => void): Unsub
+  }
   agent: {
     run(p: { runId: string; mode: Mode; modelId: string; history: Message[]; folders: string[] }): Promise<{
       messages: Message[]

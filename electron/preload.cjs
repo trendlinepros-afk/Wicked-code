@@ -40,6 +40,13 @@ contextBridge.exposeInMainWorld('wicked', {
     onState: subscribe('model:state'),
   },
   gpu: { stats: invoke('gpu:stats') },
+  app: { info: invoke('app:info') },
+  updater: {
+    state: invoke('updater:state'),
+    check: invoke('updater:check'),
+    install: invoke('updater:install'),
+    onStatus: subscribe('updater:status'),
+  },
   agent: {
     run: invoke('agent:run'),
     stop: invoke('agent:stop'),

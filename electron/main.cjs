@@ -1,5 +1,5 @@
 // Electron main process: window, IPC, model lifecycle, agent runs.
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, session } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, session, nativeTheme } = require('electron')
 const path = require('path')
 const { Config, PROVIDERS } = require('./config.cjs')
 const { Ollama } = require('./ollama.cjs')
@@ -8,12 +8,15 @@ const { getGpuStats } = require('./gpu.cjs')
 const { listCloudModels, testApiKey } = require('./providers.cjs')
 const { runAgent } = require('./agent.cjs')
 const { Vault, setupVault, inspectVault } = require('./vault.cjs')
+const { Updater } = require('./updater.cjs')
 
 let win = null
 let config
 let ollama
 let models
 let vault
+let updater
+let quitting = false
 const runs = new Map() // runId -> AbortController
 const approvals = new Map() // requestId -> resolve
 const pulls = new Map() // model name -> AbortController
@@ -22,13 +25,19 @@ function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
 }
 
+function applyTheme() {
+  const t = config.get('theme')
+  nativeTheme.themeSource = t === 'light' || t === 'dark' ? t : 'system'
+  if (win && !win.isDestroyed()) win.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0f0e13' : '#f7f6fa')
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1360,
     height: 880,
     minWidth: 900,
     minHeight: 600,
-    backgroundColor: '#0f0e13',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f0e13' : '#f7f6fa',
     title: 'Wicked Code',
     autoHideMenuBar: true,
     webPreferences: {
@@ -61,9 +70,10 @@ function registerIpc() {
   // ----- settings -----
   handle('settings:get', () => config.publicSettings())
   handle('settings:set', (key, value) => {
-    const allowed = ['ollamaUrl', 'idleUnloadSeconds', 'permissionMode', 'useVaultMemory', 'contextLength']
+    const allowed = ['ollamaUrl', 'idleUnloadSeconds', 'permissionMode', 'useVaultMemory', 'contextLength', 'theme']
     if (!allowed.includes(key)) throw new Error('Setting not editable: ' + key)
     config.set(key, value)
+    if (key === 'theme') applyTheme()
     return config.publicSettings()
   })
   handle('apiKeys:set', (provider, key) => {
@@ -170,6 +180,19 @@ function registerIpc() {
     return stats
   })
 
+  // ----- app info + updates -----
+  handle('app:info', () => ({ version: app.getVersion(), packaged: app.isPackaged, platform: process.platform }))
+  handle('updater:state', () => updater.state)
+  handle('updater:check', () => updater.check())
+  handle('updater:install', async () => {
+    // Free VRAM before the app quits to install.
+    quitting = true
+    if (models.isLocal() && models.status === 'loaded') {
+      await Promise.race([models.unload(), new Promise((r) => setTimeout(r, 3000))])
+    }
+    return updater.install()
+  })
+
   // ----- agent -----
   handle('agent:run', async ({ runId, mode, modelId, history, folders }) => {
     const { provider, model } = parseModelId(modelId)
@@ -219,6 +242,7 @@ function registerIpc() {
 
 app.whenReady().then(() => {
   config = new Config(app.getPath('userData'), safeStorage)
+  applyTheme()
   ollama = new Ollama(() => config.get('ollamaUrl'))
   vault = new Vault(() => config.get('vaultPath'))
   models = new ModelManager({
@@ -228,6 +252,12 @@ app.whenReady().then(() => {
   })
   models.on('state', (s) => send('model:state', s))
   setInterval(() => models.tick(), 1000)
+  updater = new Updater({
+    supported: app.isPackaged,
+    currentVersion: app.getVersion(),
+    getAutoUpdater: () => require('electron-updater').autoUpdater,
+  })
+  updater.on('status', (s) => send('updater:status', s))
 
   if (app.isPackaged) {
     session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
@@ -245,7 +275,6 @@ app.whenReady().then(() => {
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow())
 })
 
-let quitting = false
 app.on('before-quit', async (e) => {
   if (quitting || !models || !models.isLocal() || models.status !== 'loaded') return
   // Free VRAM on exit.

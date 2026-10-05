@@ -12,6 +12,7 @@ const DEFAULTS = {
   selectedModel: 'ollama:qwen3.8:27b',
   permissionMode: 'ask', // 'ask' | 'auto-edits' | 'auto-all'
   useVaultMemory: true,
+  theme: 'system', // 'system' | 'light' | 'dark'
   modelNotes: {},
   apiKeys: {}, // provider -> { enc: base64, plain?: string }
 }

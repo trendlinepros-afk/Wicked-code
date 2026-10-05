@@ -1,12 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import {
   api,
+  type AppInfo,
   type CloudModel,
   type GpuStats,
   type LocalModel,
   type ModelState,
   type PullProgress,
   type Settings,
+  type UpdateState,
 } from './api'
 
 interface AppStore {
@@ -21,6 +23,8 @@ interface AppStore {
   pulls: Record<string, PullProgress>
   startPull(name: string): Promise<void>
   selectModel(id: string): Promise<void>
+  appInfo: AppInfo | null
+  update: UpdateState | null
 }
 
 const Ctx = createContext<AppStore | null>(null)
@@ -39,6 +43,8 @@ export function AppProvider({ initial, children }: { initial: Settings; children
   const [localModels, setLocalModels] = useState<LocalModel[]>([])
   const [cloudModels, setCloudModels] = useState<CloudModel[]>([])
   const [pulls, setPulls] = useState<Record<string, PullProgress>>({})
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
+  const [update, setUpdate] = useState<UpdateState | null>(null)
   const refreshing = useRef(false)
   const wasRunning = useRef(true)
 
@@ -61,6 +67,13 @@ export function AppProvider({ initial, children }: { initial: Settings; children
     refreshModels()
     return api().model.onState(setModelState)
   }, [refreshModels])
+
+  // App version + update status.
+  useEffect(() => {
+    api().app.info().then(setAppInfo)
+    api().updater.state().then(setUpdate)
+    return api().updater.onStatus(setUpdate)
+  }, [])
 
   // Re-list cloud models when API keys change.
   const keySig = Object.values(settings.apiKeys).map((k) => k.hint).join('|')
@@ -141,8 +154,10 @@ export function AppProvider({ initial, children }: { initial: Settings; children
       pulls,
       startPull,
       selectModel,
+      appInfo,
+      update,
     }),
-    [settings, modelState, gpu, ollamaRunning, localModels, cloudModels, refreshModels, pulls, startPull, selectModel],
+    [settings, modelState, gpu, ollamaRunning, localModels, cloudModels, refreshModels, pulls, startPull, selectModel, appInfo, update],
   )
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
