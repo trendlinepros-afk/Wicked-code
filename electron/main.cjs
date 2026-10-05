@@ -30,6 +30,7 @@ let github
 let launcher
 let quitting = false
 const runs = new Map() // runId -> AbortController
+const titleRuns = new Set() // AbortControllers for chat-naming requests
 const approvals = new Map() // requestId -> resolve
 const runAllowAll = new Set() // runIds where the user chose "allow all for this session"
 const pulls = new Map() // model name -> AbortController
@@ -42,6 +43,25 @@ function applyTheme() {
   const t = config.get('theme')
   nativeTheme.themeSource = t === 'light' || t === 'dark' ? t : 'system'
   if (win && !win.isDestroyed()) win.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0f0e13' : '#f7f6fa')
+}
+
+/** Ctrl+U: stop everything that's using the model and unload it from VRAM right now. */
+async function forceUnload() {
+  log('model', 'force unload (Ctrl+U)', { status: models.status, runs: runs.size })
+  for (const ac of runs.values()) ac.abort()
+  for (const ac of titleRuns) ac.abort()
+  for (const [id, resolve] of approvals) {
+    resolve(false)
+    approvals.delete(id)
+  }
+  let loaded = []
+  try {
+    loaded = (await ollama.ps()).map((m) => m.name)
+  } catch {
+    /* ollama offline */
+  }
+  await models.forceUnload(loaded)
+  send('model:forced', { unloaded: loaded.length ? loaded : models.isLocal() ? [parseModelId(models.current).model] : [] })
 }
 
 function createWindow() {
@@ -59,6 +79,14 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
     },
+  })
+  // Ctrl+U (Cmd+U on macOS): force-unload the model, even mid-reply. Caught here so it works
+  // whatever has focus inside the window (including the message box).
+  win.webContents.on('before-input-event', (e, input) => {
+    if (input.type === 'keyDown' && (input.control || input.meta) && !input.alt && !input.shift && input.key.toLowerCase() === 'u') {
+      e.preventDefault()
+      forceUnload()
+    }
   })
   // Open external links in the user's browser rather than inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -201,6 +229,8 @@ function registerIpc() {
     const { provider, model } = parseModelId(modelId)
     models.beginBusy() // don't let the idle timer unload the model mid-title
     const started = Date.now()
+    const ac = new AbortController()
+    titleRuns.add(ac)
     try {
       const title = await generateTitle({
         provider,
@@ -210,10 +240,12 @@ function registerIpc() {
         ollamaOptions: ollamaRunOptions(),
         keepAlive: models.keepAlive(),
         messages,
+        signal: ac.signal,
       })
       log('title', 'generated', { ms: Date.now() - started, title })
       return title
     } finally {
+      titleRuns.delete(ac)
       models.endBusy()
     }
   })
@@ -296,6 +328,7 @@ function registerIpc() {
     await models.unload()
     return models.state()
   })
+  handle('model:forceUnload', () => forceUnload())
   handle('model:touch', () => {
     // Typing counts as activity (resets the idle timer); it only loads the model if that setting is on.
     if (config.get('autoLoadOnType') === false) models.lastActivity = Date.now()

@@ -6,7 +6,7 @@ import { TopBar } from './components/TopBar'
 import { Workspace } from './components/Workspace'
 import { SettingsView, type SettingsPage } from './settings/Settings'
 import { useTheme } from './lib/theme'
-import { StatusBar, UpdateReadyDialog } from './components/Updates'
+import { ForceUnloadToast, StatusBar, UpdateReadyDialog } from './components/Updates'
 
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -29,6 +29,19 @@ function Shell() {
   useTheme(settings.theme)
   const [mode, setMode] = useState<Mode>('chat')
   const [settingsPage, setSettingsPage] = useState<SettingsPage | null>(null)
+
+  // Ctrl+U force-unload. The main process catches real key presses first (and stops them here);
+  // this is a fallback for any that reach the page.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'u') {
+        e.preventDefault()
+        api().model.forceUnload()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   return (
     <div className="app">
@@ -85,6 +98,7 @@ function Shell() {
       </div>
       <StatusBar />
       <UpdateReadyDialog />
+      <ForceUnloadToast />
     </div>
   )
 }

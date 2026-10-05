@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('wicked', {
     load: invoke('model:load'),
     unload: invoke('model:unload'),
     touch: invoke('model:touch'),
+    forceUnload: invoke('model:forceUnload'),
+    onForced: subscribe('model:forced'),
     onState: subscribe('model:state'),
   },
   gpu: { stats: invoke('gpu:stats') },

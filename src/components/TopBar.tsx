@@ -102,6 +102,7 @@ function ModelControl() {
         <button
           className={status === 'loaded' ? 'btn btn-sm' : 'btn btn-sm btn-primary'}
           disabled={busy || !modelState.model || !ollamaRunning || modelState.busy}
+          title={status === 'loaded' ? 'Unload model (Ctrl+U force-unloads anytime, even mid-reply)' : 'Load model'}
           onClick={() => (status === 'loaded' ? api().model.unload() : api().model.load())}
         >
           {busy ? <Spinner /> : <Icon name="power" size={14} />}

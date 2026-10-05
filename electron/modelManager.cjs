@@ -144,9 +144,27 @@ class ModelManager extends EventEmitter {
   endBusy() {
     this.busy = Math.max(0, this.busy - 1)
     this.lastActivity = this.now()
-    // Ollama loads the model itself when it serves a chat request.
-    if (this.isLocal() && this.status !== 'loaded') this.setStatus('loaded')
+    // Ollama loads the model itself when it serves a chat request — unless the user just
+    // force-unloaded it (the aborted run ends after the unload).
+    const justForced = this.forcedAt && this.now() - this.forcedAt < 5000
+    if (this.isLocal() && this.status !== 'loaded' && !justForced) this.setStatus('loaded')
     else this.emit('state', this.state())
+  }
+
+  /**
+   * Ctrl+U: unload now, regardless of what's running. The caller aborts in-flight requests first;
+   * `loadedNames` are all models Ollama currently has in memory (so nothing is left behind).
+   */
+  async forceUnload(loadedNames = []) {
+    this.forcedAt = this.now()
+    return this.enqueue(async () => {
+      const names = new Set(loadedNames)
+      if (this.isLocal()) names.add(parseModelId(this.current).model)
+      if (this.isLocal()) this.setStatus('unloading')
+      for (const n of names) await this.ollama.unload(n).catch(() => {})
+      this.forcedAt = this.now()
+      this.setStatus(this.isLocal() ? 'unloaded' : this.current ? 'cloud' : 'unloaded')
+    })
   }
 
   /** Called periodically: unload after the idle window with no activity. */

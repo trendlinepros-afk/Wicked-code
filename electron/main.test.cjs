@@ -643,3 +643,15 @@ test('generateTitle asks the session model and falls back on failure', async () 
     server.close()
   }
 })
+
+test('force unload (Ctrl+U) mid-reply unloads everything and stays unloaded', async () => {
+  const ollama = fakeOllama()
+  const mm = new ModelManager({ ollama, idleSeconds: () => 30, initialModel: 'ollama:qwen3:8b' })
+  await mm.load()
+  mm.beginBusy() // a reply is streaming
+  await mm.forceUnload(['qwen3:8b', 'other:7b'])
+  assert.strictEqual(mm.status, 'unloaded')
+  assert.deepStrictEqual(ollama.calls.filter((c) => c[0] === 'unload').map((c) => c[1]).sort(), ['other:7b', 'qwen3:8b'])
+  mm.endBusy() // the aborted run finishes afterwards
+  assert.strictEqual(mm.status, 'unloaded') // not flipped back to "loaded"
+})

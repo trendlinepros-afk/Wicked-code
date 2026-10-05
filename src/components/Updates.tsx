@@ -184,3 +184,26 @@ export function VersionTag() {
   }, [])
   return <div className="version-tag">{v ? `v${v}` : ''}</div>
 }
+
+/** Brief confirmation when Ctrl+U force-unloads the model. */
+export function ForceUnloadToast() {
+  const [msg, setMsg] = useState<string | null>(null)
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout>
+    const off = api().model.onForced(({ unloaded }) => {
+      setMsg(unloaded.length ? `Unloaded ${unloaded.join(', ')} — VRAM freed` : 'No model was loaded')
+      clearTimeout(t)
+      t = setTimeout(() => setMsg(null), 3500)
+    })
+    return () => {
+      off()
+      clearTimeout(t)
+    }
+  }, [])
+  if (!msg) return null
+  return (
+    <div className="toast" role="status">
+      <Icon name="power" size={14} /> <b>Ctrl+U</b> {msg}
+    </div>
+  )
+}

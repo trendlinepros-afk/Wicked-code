@@ -278,7 +278,9 @@ export function Workspace({
     setActive((cur) => (cur?.id === finished.id ? finished : cur))
     const saved = await persist(finished)
     setActive((cur) => (cur?.id === saved.id ? saved : cur))
-    if (saved.titleSource === 'pending') nameSession(saved.id, modelId, saved.messages)
+    // Only name it after a reply that completed normally — never reload a model the user just
+    // stopped or force-unloaded (Ctrl+U). A pending title is named after the next good reply.
+    if (saved.titleSource === 'pending' && result && !result.aborted && !failure) nameSession(saved.id, modelId, saved.messages)
   }
 
   /** Ask the model for a short title describing the conversation (can take a while on local models). */

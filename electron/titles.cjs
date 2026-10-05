@@ -36,6 +36,7 @@ function fallbackTitle(text) {
  * @param {object} [p.ollamaOptions]
  * @param {string|number} [p.keepAlive]
  * @param {Array<{role: string, content: string}>} p.messages  the conversation so far
+ * @param {AbortSignal} [p.signal]
  */
 async function generateTitle(p) {
   const convo = p.messages
@@ -57,7 +58,7 @@ async function generateTitle(p) {
         { role: 'user', content: `Conversation:\n\n${convo}\n\nTitle (3-6 words):` },
       ],
       tools: [],
-      signal: AbortSignal.timeout(120_000),
+      signal: p.signal ? AbortSignal.any([p.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
       onText: () => {},
       onThinking: () => {},
     })

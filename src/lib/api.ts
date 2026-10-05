@@ -236,6 +236,8 @@ export interface WickedApi {
     load(): Promise<ModelState>
     unload(): Promise<ModelState>
     touch(): Promise<void>
+    forceUnload(): Promise<void>
+    onForced(cb: (p: { unloaded: string[] }) => void): Unsub
     onState(cb: (s: ModelState) => void): Unsub
   }
   gpu: { stats(): Promise<GpuStats> }

@@ -121,7 +121,10 @@ export function General() {
 
       <section className="card">
         <h3>Model memory</h3>
-        <p className="muted small">Controls when local models are loaded into and removed from your GPU’s VRAM.</p>
+        <p className="muted small">
+          Controls when local models are loaded into and removed from your GPU’s VRAM. Press <kbd>Ctrl</kbd>+<kbd>U</kbd> anytime to force-unload
+          the model immediately — it stops any reply in progress.
+        </p>
         <label className="check">
           <input type="checkbox" checked={settings.autoLoadOnType !== false} onChange={(e) => set('autoLoadOnType', e.target.checked)} />
           Start loading the selected model as soon as I start typing in a chat or code session
