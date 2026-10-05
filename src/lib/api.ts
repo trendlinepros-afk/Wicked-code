@@ -21,6 +21,7 @@ export interface Settings {
   cloneRoot: string | null
   cloneRootResolved: string
   modelNotes: Record<string, string>
+  favoriteModels: string[]
   apiKeys: Record<CloudProvider | 'github', { set: boolean; hint: string }>
 }
 

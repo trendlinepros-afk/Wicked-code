@@ -27,7 +27,12 @@ export function ModelPicker({ disabled, onManage }: { disabled?: boolean; onMana
   }
 
   const f = filter.toLowerCase()
-  const locals = localModels.filter((m) => m.name.toLowerCase().includes(f))
+  const favs = settings.favoriteModels ?? []
+  const favRank = (name: string) => {
+    const i = favs.findIndex((x) => x === name || `${x}:latest` === name || x === `${name}:latest`)
+    return i < 0 ? Infinity : i
+  }
+  const locals = localModels.filter((m) => m.name.toLowerCase().includes(f)).sort((a, b) => favRank(a.name) - favRank(b.name))
   const groups = (['anthropic', 'gemini', 'deepseek', 'grok'] as CloudProvider[])
     .map((p) => ({ p, models: cloudModels.filter((m) => m.provider === p && m.model.toLowerCase().includes(f)) }))
     .filter((g) => g.models.length)
@@ -59,7 +64,10 @@ export function ModelPicker({ disabled, onManage }: { disabled?: boolean; onMana
               const need = catalogInfo(m.name)?.vramGB ?? estimateVramGB(m.size)
               return (
                 <button key={id} className={`model-menu-item ${id === current ? 'selected' : ''}`} onClick={() => choose(id)}>
-                  <span className="model-menu-item-name">{m.name}</span>
+                  <span className="model-menu-item-name">
+                    {favRank(m.name) !== Infinity && <span className="fav-mini">★</span>}
+                    {m.name}
+                  </span>
                   <span className="model-menu-item-meta">
                     {formatGB(need, false)} <Stars stars={rateModel(need, gpu).stars} />
                   </span>

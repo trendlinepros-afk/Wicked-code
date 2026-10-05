@@ -19,6 +19,7 @@ const DEFAULTS = {
   useVaultMemory: true,
   theme: 'system', // 'system' | 'light' | 'dark'
   modelNotes: {},
+  favoriteModels: [], // Ollama model names pinned in Local Model Management
   apiKeys: {}, // provider -> { enc: base64, plain?: string }
 }
 

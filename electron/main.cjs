@@ -140,7 +140,7 @@ function registerIpc() {
   handle('settings:set', (key, value) => {
     const allowed = [
       'ollamaUrl', 'idleUnloadSeconds', 'permissionMode', 'useVaultMemory', 'contextLength', 'theme',
-      'maxAgentSteps', 'autoStartOllama', 'stopOllamaOnExit', 'cloneRoot',
+      'maxAgentSteps', 'autoStartOllama', 'stopOllamaOnExit', 'cloneRoot', 'favoriteModels',
     ]
     if (!allowed.includes(key)) throw new Error('Setting not editable: ' + key)
     config.set(key, value)

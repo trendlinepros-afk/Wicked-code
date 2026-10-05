@@ -1729,3 +1729,54 @@ textarea.input {
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- favorites ---------- */
+.model-card {
+  position: relative;
+}
+.model-card header {
+  padding-right: 34px; /* room for the favorite button */
+}
+.fav-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--line-2);
+  background: var(--bg);
+  color: var(--muted);
+  transition: color 0.12s, border-color 0.12s, background 0.12s, transform 0.12s;
+}
+.fav-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.fav-btn:active {
+  transform: scale(0.9);
+}
+.fav-btn.on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.fav-title-star,
+.fav-mini {
+  color: var(--accent);
+}
+.fav-mini {
+  margin-right: 5px;
+  font-size: 11px;
+}
+.fav-empty {
+  padding: 14px 16px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius-lg);
+}
+.fav-inline {
+  color: var(--accent);
+  font-weight: 700;
+}

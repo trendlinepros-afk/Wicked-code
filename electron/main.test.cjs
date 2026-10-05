@@ -527,6 +527,9 @@ test('settings from an older version load with new defaults and nothing lost', (
   assert.strictEqual(c.getApiKey('grok'), 'k')
   assert.strictEqual(c.get('autoStartOllama'), true) // new setting gets its default
   assert.strictEqual(c.get('theme'), 'system')
+  assert.deepStrictEqual(c.get('favoriteModels'), []) // added in 0.2.2
+  c.set('favoriteModels', ['qwen3.8:27b'])
+  assert.deepStrictEqual(new Config(dir, null).get('favoriteModels'), ['qwen3.8:27b'])
 })
 
 test('a corrupted settings file falls back to the backup copy', () => {

@@ -10,7 +10,7 @@ type Confirm = { kind: 'delete'; name: string } | { kind: 'download'; name: stri
 const isInstalled = (models: LocalModel[], name: string) => models.some((m) => m.name === name || m.name === `${name}:latest`)
 
 export function LocalModels() {
-  const { localModels, ollamaRunning, gpu, pulls, startPull, refreshModels, settings, selectModel, modelState } = useApp()
+  const { localModels, ollamaRunning, gpu, pulls, startPull, refreshModels, settings, setSettings, selectModel, modelState } = useApp()
   const [confirm, setConfirm] = useState<Confirm>(null)
   const [query, setQuery] = useState('')
   const [tag, setTag] = useState('all')
@@ -22,9 +22,12 @@ export function LocalModels() {
     refreshModels()
   }, [refreshModels])
 
+  const favorites = settings.favoriteModels ?? []
+  const isFav = (name: string) => favorites.some((f) => f === name || f === `${name}:latest` || `${f}:latest` === name)
+
   const store = useMemo(() => {
     const q = query.toLowerCase()
-    const list = CATALOG.filter((m) => !isInstalled(localModels, m.name))
+    const list = CATALOG.filter((m) => !isInstalled(localModels, m.name) && !isFav(m.name))
       .filter((m) => tag === 'all' || m.tags.includes(tag))
       .filter((m) => !q || `${m.name} ${m.display} ${m.strengths} ${m.tags.join(' ')}`.toLowerCase().includes(q))
     const stars = (m: CatalogModel) => rateModel(m.vramGB, gpu).stars
@@ -34,7 +37,23 @@ export function LocalModels() {
       if (sort === 'size') return a.vramGB - b.vramGB
       return stars(b) - stars(a) || b.vramGB - a.vramGB
     })
-  }, [localModels, query, tag, sort, gpu])
+  }, [localModels, query, tag, sort, gpu, favorites])
+
+  const toggleFavorite = async (name: string) => {
+    const next = isFav(name) ? favorites.filter((f) => f !== name && f !== `${name}:latest` && `${f}:latest` !== name) : [...favorites, name]
+    setSettings((s) => ({ ...s, favoriteModels: next })) // instant feedback
+    setSettings(await api().settings.set('favoriteModels', next))
+  }
+
+  // Favorites hold installed models and/or store models, in the order they were starred.
+  const favInstalled = localModels.filter((m) => isFav(m.name))
+  const favStore = CATALOG.filter((m) => isFav(m.name) && !isInstalled(localModels, m.name))
+  const downloaded = localModels.filter((m) => !isFav(m.name))
+  const favOrder = (name: string) => favorites.findIndex((f) => f === name || f === `${name}:latest` || `${f}:latest` === name)
+  const favCards = [
+    ...favInstalled.map((m) => ({ key: m.name, order: favOrder(m.name), node: installedCard(m) })),
+    ...favStore.map((m) => ({ key: m.name, order: favOrder(m.name), node: storeCard(m) })),
+  ].sort((a, b) => a.order - b.order)
 
   const allTags = useMemo(() => ['all', ...Array.from(new Set(CATALOG.flatMap((m) => m.tags)))], [])
 
@@ -47,6 +66,7 @@ export function LocalModels() {
       try {
         await api().models.delete(c.name)
         await api().models.setNotes(c.name, '')
+        if (isFav(c.name) && !catalogInfo(c.name)) await toggleFavorite(c.name)
         await refreshModels()
       } catch (e) {
         setError(String((e as Error).message || e))
@@ -54,6 +74,94 @@ export function LocalModels() {
     } else {
       startPull(c.name)
     }
+  }
+
+  function installedCard(m: LocalModel) {
+      const info = catalogInfo(m.name)
+      const need = info?.vramGB ?? estimateVramGB(m.size)
+      const r = rateModel(need, gpu)
+      const id = `ollama:${m.name}`
+      const selected = settings.selectedModel === id
+      return (
+        <article key={m.name} className={`model-card ${selected ? 'selected' : ''}`}>
+          <FavoriteButton on={isFav(m.name)} onToggle={() => toggleFavorite(m.name)} />
+          <header>
+            <div>
+              <div className="model-card-title">{info?.display ?? m.name}</div>
+              <code className="model-card-tag">{m.name}</code>
+            </div>
+            <div className="model-card-rating" title={r.detail}>
+              <Stars stars={r.stars} title={r.detail} />
+              <span className="muted small">{r.label}</span>
+            </div>
+          </header>
+          <div className="model-facts">
+            <span>
+              <b>{formatGB(need, false)}</b> VRAM needed
+            </span>
+            <span>{formatGB(m.size)} on disk</span>
+            {m.parameterSize && <span>{m.parameterSize}</span>}
+            {m.quantization && <span>{m.quantization}</span>}
+          </div>
+          <ModelBlurb info={info} fallback={`${m.family || 'Custom'} model${m.parameterSize ? ` with ${m.parameterSize} parameters` : ''}. Not in the Wicked Code catalog, so strengths are unknown.`} />
+          <div className="muted small fit-detail">{r.detail}</div>
+          <Notes name={m.name} initial={settings.modelNotes[m.name] || ''} />
+          <footer>
+            <button
+              className={`btn btn-sm ${selected ? '' : 'btn-primary'}`}
+              disabled={selected || r.stars === 0 || modelState?.busy}
+              onClick={() => selectModel(id)}
+            >
+              {selected ? 'Active model' : 'Use this model'}
+            </button>
+            <button className="btn btn-sm btn-danger" onClick={() => setConfirm({ kind: 'delete', name: m.name })}>
+              <Icon name="trash" size={14} /> Delete
+            </button>
+          </footer>
+        </article>
+      )
+  }
+
+  function storeCard(m: CatalogModel) {
+      const r = rateModel(m.vramGB, gpu)
+      return (
+        <article key={m.name} className={`model-card store ${m.featured ? 'featured' : ''}`}>
+          <FavoriteButton on={isFav(m.name)} onToggle={() => toggleFavorite(m.name)} />
+          <header>
+            <div>
+              <div className="model-card-title">
+                {m.display} {m.featured && <span className="pill accent">Featured</span>}
+              </div>
+              <code className="model-card-tag">{m.name}</code>
+            </div>
+            <div className="model-card-rating" title={r.detail}>
+              <Stars stars={r.stars} title={r.detail} />
+              <span className="muted small">{r.label}</span>
+            </div>
+          </header>
+          <div className="model-facts">
+            <span>
+              <b>{formatGB(m.vramGB, false)}</b> VRAM needed
+            </span>
+            <span>{formatGB(m.sizeGB, false)} download</span>
+            {m.tags.map((t) => (
+              <span key={t} className="tag">
+                {t}
+              </span>
+            ))}
+          </div>
+          <ModelBlurb info={m} />
+          <div className="muted small fit-detail">{r.detail}</div>
+          <footer>
+            <PullButton
+              name={m.name}
+              progress={pulls[m.name]}
+              disabled={!ollamaRunning}
+              onClick={() => setConfirm({ kind: 'download', name: m.name, sizeGB: m.sizeGB })}
+            />
+          </footer>
+        </article>
+      )
   }
 
   const gpuSummary = gpu
@@ -81,54 +189,23 @@ export function LocalModels() {
       {error && <div className="callout error">{error}</div>}
 
       <h3 className="section-title">
-        Downloaded models <span className="count">{localModels.length}</span>
+        <span className="fav-title-star">★</span> Favorites <span className="count">{favCards.length}</span>
+      </h3>
+      {favCards.length ? (
+        <div className="model-grid">{favCards.map((c) => c.node)}</div>
+      ) : (
+        <div className="fav-empty muted small">
+          Click the <span className="fav-inline">☆</span> in the top-right corner of any model to pin it here.
+        </div>
+      )}
+
+      <h3 className="section-title">
+        Downloaded models <span className="count">{downloaded.length}</span>
       </h3>
       {ollamaRunning && !localModels.length && <div className="muted pad">No models downloaded yet. Pick one from the store below.</div>}
+      {ollamaRunning && !!localModels.length && !downloaded.length && <div className="muted pad">All your downloaded models are in Favorites.</div>}
       <div className="model-grid">
-        {localModels.map((m) => {
-          const info = catalogInfo(m.name)
-          const need = info?.vramGB ?? estimateVramGB(m.size)
-          const r = rateModel(need, gpu)
-          const id = `ollama:${m.name}`
-          const selected = settings.selectedModel === id
-          return (
-            <article key={m.name} className={`model-card ${selected ? 'selected' : ''}`}>
-              <header>
-                <div>
-                  <div className="model-card-title">{info?.display ?? m.name}</div>
-                  <code className="model-card-tag">{m.name}</code>
-                </div>
-                <div className="model-card-rating" title={r.detail}>
-                  <Stars stars={r.stars} title={r.detail} />
-                  <span className="muted small">{r.label}</span>
-                </div>
-              </header>
-              <div className="model-facts">
-                <span>
-                  <b>{formatGB(need, false)}</b> VRAM needed
-                </span>
-                <span>{formatGB(m.size)} on disk</span>
-                {m.parameterSize && <span>{m.parameterSize}</span>}
-                {m.quantization && <span>{m.quantization}</span>}
-              </div>
-              <ModelBlurb info={info} fallback={`${m.family || 'Custom'} model${m.parameterSize ? ` with ${m.parameterSize} parameters` : ''}. Not in the Wicked Code catalog, so strengths are unknown.`} />
-              <div className="muted small fit-detail">{r.detail}</div>
-              <Notes name={m.name} initial={settings.modelNotes[m.name] || ''} />
-              <footer>
-                <button
-                  className={`btn btn-sm ${selected ? '' : 'btn-primary'}`}
-                  disabled={selected || r.stars === 0 || modelState?.busy}
-                  onClick={() => selectModel(id)}
-                >
-                  {selected ? 'Active model' : 'Use this model'}
-                </button>
-                <button className="btn btn-sm btn-danger" onClick={() => setConfirm({ kind: 'delete', name: m.name })}>
-                  <Icon name="trash" size={14} /> Delete
-                </button>
-              </footer>
-            </article>
-          )
-        })}
+        {downloaded.map((m) => installedCard(m))}
       </div>
 
       <h3 className="section-title store-title">
@@ -150,46 +227,7 @@ export function LocalModels() {
         ))}
       </div>
       <div className="model-grid">
-        {store.map((m) => {
-          const r = rateModel(m.vramGB, gpu)
-          return (
-            <article key={m.name} className={`model-card store ${m.featured ? 'featured' : ''}`}>
-              <header>
-                <div>
-                  <div className="model-card-title">
-                    {m.display} {m.featured && <span className="pill accent">Featured</span>}
-                  </div>
-                  <code className="model-card-tag">{m.name}</code>
-                </div>
-                <div className="model-card-rating" title={r.detail}>
-                  <Stars stars={r.stars} title={r.detail} />
-                  <span className="muted small">{r.label}</span>
-                </div>
-              </header>
-              <div className="model-facts">
-                <span>
-                  <b>{formatGB(m.vramGB, false)}</b> VRAM needed
-                </span>
-                <span>{formatGB(m.sizeGB, false)} download</span>
-                {m.tags.map((t) => (
-                  <span key={t} className="tag">
-                    {t}
-                  </span>
-                ))}
-              </div>
-              <ModelBlurb info={m} />
-              <div className="muted small fit-detail">{r.detail}</div>
-              <footer>
-                <PullButton
-                  name={m.name}
-                  progress={pulls[m.name]}
-                  disabled={!ollamaRunning}
-                  onClick={() => setConfirm({ kind: 'download', name: m.name, sizeGB: m.sizeGB })}
-                />
-              </footer>
-            </article>
-          )
-        })}
+        {store.map((m) => storeCard(m))}
       </div>
       {!store.length && <div className="muted pad">No store models match.</div>}
 
@@ -249,6 +287,28 @@ export function LocalModels() {
         />
       )}
     </div>
+  )
+}
+
+function FavoriteButton({ on, onToggle }: { on: boolean; onToggle(): void }) {
+  return (
+    <button
+      className={`fav-btn ${on ? 'on' : ''}`}
+      onClick={onToggle}
+      title={on ? 'Remove from favorites' : 'Add to favorites'}
+      aria-label={on ? 'Remove from favorites' : 'Add to favorites'}
+      aria-pressed={on}
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden>
+        <path
+          d="M12 3.2l2.7 5.5 6 .9-4.35 4.25 1.03 6-5.38-2.83-5.38 2.83 1.03-6L3.3 9.6l6-.9z"
+          fill={on ? 'currentColor' : 'none'}
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
   )
 }
 
