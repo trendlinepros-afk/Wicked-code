@@ -12,6 +12,7 @@ const { Vault, setupVault, inspectVault } = require('./vault.cjs')
 const { Updater } = require('./updater.cjs')
 const { generateTitle } = require('./titles.cjs')
 const { extractFiles } = require('./attachments.cjs')
+const { planGpuLayers } = require('./vramBudget.cjs')
 const { ProcessManager } = require('./processes.cjs')
 const { GitHub, repoInfo, slugify } = require('./github.cjs')
 const { OllamaLauncher } = require('./ollamaLauncher.cjs')
@@ -208,12 +209,32 @@ async function browserCheck({ url, waitMs = 1500, script }) {
  * avoids a reload on the first message, and capping CPU threads leaves a core free so Windows stays
  * responsive even when part of a model runs on the CPU.
  */
-function ollamaRunOptions() {
+const gpuPlans = new Map() // "model|ctx|reserve" -> options, decided when the model is loaded
+
+async function ollamaRunOptions(model) {
   const logical = os.cpus().length || 4
-  return {
+  const base = {
     num_ctx: Number(config.get('contextLength')) || 8192,
     num_thread: Math.max(2, Math.floor(logical / 2) - 1),
   }
+  const reserveGB = Number(config.get('vramReserveGB'))
+  if (!model || !(reserveGB > 0)) return base
+  const key = `${model}|${base.num_ctx}|${reserveGB}`
+  if (gpuPlans.has(key)) return gpuPlans.get(key)
+  let opts = base
+  try {
+    // VRAM safety buffer: cap the layers on the GPU so total VRAM use stays below (total − buffer).
+    const [stats, list, show] = await Promise.all([getGpuStats(() => ollama.ps()), ollama.list(), ollama.show(model)])
+    const entry = list.find((m) => m.name === model || m.name === `${model}:latest`)
+    const otherUsedMB = stats.otherUsedMB ?? Math.max(0, stats.usedMB - stats.ollamaVramMB)
+    const plan = planGpuLayers({ fileBytes: entry?.size || 0, show, ctx: base.num_ctx, totalMB: stats.totalMB, otherUsedMB, reserveGB })
+    log('vram', 'plan', { model, ...plan, totalMB: stats.totalMB, otherUsedMB, reserveGB })
+    if (plan.numGpu !== null && entry) opts = { ...base, num_gpu: plan.numGpu }
+  } catch (e) {
+    log('vram', 'plan failed', { model, message: String(e.message || e) })
+  }
+  gpuPlans.set(key, opts)
+  return opts
 }
 
 function cloneRoot() {
@@ -230,7 +251,7 @@ function registerIpc() {
   handle('settings:set', (key, value) => {
     const allowed = [
       'ollamaUrl', 'idleUnloadSeconds', 'permissionMode', 'useVaultMemory', 'contextLength', 'theme',
-      'maxAgentSteps', 'autoLoadOnType', 'autoStartOllama', 'stopOllamaOnExit', 'cloneRoot', 'favoriteModels',
+      'maxAgentSteps', 'autoLoadOnType', 'vramReserveGB', 'autoStartOllama', 'stopOllamaOnExit', 'cloneRoot', 'favoriteModels',
     ]
     if (!allowed.includes(key)) throw new Error('Setting not editable: ' + key)
     config.set(key, value)
@@ -353,7 +374,7 @@ function registerIpc() {
         model,
         apiKey: provider === 'ollama' ? null : config.getApiKey(provider),
         ollama,
-        ollamaOptions: ollamaRunOptions(),
+        ollamaOptions: provider === 'ollama' ? await ollamaRunOptions(model) : undefined,
         keepAlive: models.keepAlive(),
         messages,
         signal: ac.signal,
@@ -565,7 +586,7 @@ function registerIpc() {
         ollama,
         numCtx: Number(config.get('contextLength')) || 0,
         keepAlive: models.keepAlive(),
-        ollamaOptions: ollamaRunOptions(),
+        ollamaOptions: provider === 'ollama' ? await ollamaRunOptions(model) : undefined,
         permissionMode: () => runPermissions.get(runId) || 'ask',
         signal: ac.signal,
         emit,
@@ -637,7 +658,10 @@ app.whenReady().then(() => {
     },
     initialModel: config.get('selectedModel'),
   })
-  models.on('state', (s) => send('model:state', s))
+  models.on('state', (s) => {
+    send('model:state', s)
+    if (s.status === 'unloaded') gpuPlans.clear() // re-plan with fresh VRAM numbers next load
+  })
   setInterval(() => models.tick(), 1000)
   updater = new Updater({
     supported: app.isPackaged,
@@ -650,6 +674,8 @@ app.whenReady().then(() => {
   github = new GitHub(() => config.getApiKey('github'))
   launcher = new OllamaLauncher({
     ollama,
+    // When Wicked Code starts Ollama itself, tell Ollama to keep the same VRAM buffer free.
+    extraEnv: () => ({ OLLAMA_GPU_OVERHEAD: String(Math.round((Number(config.get('vramReserveGB')) || 0) * 1024 ** 3)) }),
     getUrl: () => config.get('ollamaUrl'),
     logFile: path.join(app.getPath('userData'), 'ollama.log'),
   })

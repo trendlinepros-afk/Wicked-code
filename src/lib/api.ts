@@ -11,6 +11,8 @@ export interface Settings {
   ollamaUrl: string
   idleUnloadSeconds: number // 0 = never
   autoLoadOnType: boolean
+  /** keep this much VRAM free; bigger models spill into system RAM */
+  vramReserveGB: number
   contextLength: number
   selectedModel: string | null
   permissionMode: PermissionMode

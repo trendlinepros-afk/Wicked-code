@@ -12,7 +12,7 @@ function formatIdle(sec: number) {
 }
 
 export function General() {
-  const { settings, setSettings, ollamaRunning, refreshModels, launcher } = useApp()
+  const { settings, setSettings, ollamaRunning, refreshModels, launcher, gpu } = useApp()
   const [url, setUrl] = useState(settings.ollamaUrl)
   const [vaultMsg, setVaultMsg] = useState<string | null>(null)
 
@@ -167,6 +167,36 @@ export function General() {
               : 'Models stay loaded until you press “Unload model” or close Wicked Code.'}
           </span>
         </div>
+      </section>
+
+      <section className="card">
+        <h3>VRAM safety buffer</h3>
+        <p className="muted small">
+          Maxing out your GPU’s memory can freeze the whole computer. Wicked Code always keeps this much VRAM free: if a model plus what other apps
+          use wouldn’t fit, part of the model runs from system RAM instead (slower, but stable).
+        </p>
+        <div className="mf-presets">
+          {[0.5, 1, 1.5, 2, 3].map((v) => (
+            <button key={v} className={(settings.vramReserveGB ?? 1) === v ? 'active' : ''} onClick={() => set('vramReserveGB', v)}>
+              {v} GB
+            </button>
+          ))}
+          <button className={(settings.vramReserveGB ?? 1) === 0 ? 'active' : ''} onClick={() => set('vramReserveGB', 0)}>
+            Off
+          </button>
+        </div>
+        {gpu && gpu.totalMB > 0 && (
+          <p className="small" style={{ marginTop: 10 }}>
+            {(settings.vramReserveGB ?? 1) > 0 ? (
+              <>
+                With your <b>{(gpu.totalMB / 1024).toFixed(1)} GB</b> GPU, total VRAM use (models + other apps) stays at or below{' '}
+                <b>{(gpu.totalMB / 1024 - (settings.vramReserveGB ?? 1)).toFixed(1)} GB</b>. Applies the next time a model is loaded.
+              </>
+            ) : (
+              <span className="bad">Off — Ollama may fill the GPU completely.</span>
+            )}
+          </p>
+        )}
       </section>
 
       <section className="card">

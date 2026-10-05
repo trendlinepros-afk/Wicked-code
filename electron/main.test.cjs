@@ -896,3 +896,44 @@ test('per-chat permission can be raised mid-run and releases the waiting approva
     server.close()
   }
 })
+
+// ---------- VRAM safety buffer ----------
+
+test('VRAM buffer: big models get a GPU layer cap so total VRAM stays under (total − buffer)', () => {
+  const { planGpuLayers } = require('./vramBudget.cjs')
+  const GB = 1024 ** 3
+  // qwen3:14b-like: 40 layers, 8 KV heads, head dim 128, ~9 GB weights; 16 GB card with 4 GB used by other apps.
+  const show = { model_info: { 'general.architecture': 'qwen3', 'qwen3.block_count': 40, 'qwen3.attention.head_count': 40, 'qwen3.attention.head_count_kv': 8, 'qwen3.embedding_length': 5120, 'qwen3.attention.key_length': 128, 'qwen3.attention.value_length': 128 } }
+  const big = planGpuLayers({ fileBytes: 9.3 * GB, show, ctx: 16384, totalMB: 16303, otherUsedMB: 4096, reserveGB: 1 })
+  assert.ok(big.numGpu > 0 && big.numGpu < 40, `layers ${big.numGpu}`)
+  // what lands on the GPU + other apps never exceeds total − 1 GB
+  assert.ok(big.gpuGB + 4 <= 16303 / 1024 - 1 + 0.01, `gpu ${big.gpuGB}`)
+  // a small model fits: no cap at all
+  const small = planGpuLayers({ fileBytes: 2.5 * GB, show: { model_info: { ...show.model_info, 'qwen3.block_count': 36 } }, ctx: 8192, totalMB: 16303, otherUsedMB: 4096, reserveGB: 1 })
+  assert.strictEqual(small.numGpu, null)
+  // no GPU detected → leave it to Ollama
+  assert.strictEqual(planGpuLayers({ fileBytes: 9 * GB, show, ctx: 8192, totalMB: 0, otherUsedMB: 0, reserveGB: 1 }).numGpu, null)
+  // a model far too big → everything on CPU (0 layers) rather than overfilling VRAM
+  assert.strictEqual(planGpuLayers({ fileBytes: 60 * GB, show, ctx: 8192, totalMB: 8192, otherUsedMB: 7000, reserveGB: 1 }).numGpu, 0)
+})
+
+test('Ollama started by the app gets the same VRAM buffer (OLLAMA_GPU_OVERHEAD)', async () => {
+  const { OllamaLauncher } = require('./ollamaLauncher.cjs')
+  const { EventEmitter } = require('events')
+  let env
+  let running = false
+  const l = new OllamaLauncher({
+    ollama: { isRunning: async () => running },
+    getUrl: () => 'http://127.0.0.1:11434',
+    logFile: path.join(tmpDir(), 'o.log'),
+    find: async () => '/bin/ollama',
+    extraEnv: () => ({ OLLAMA_GPU_OVERHEAD: String(1024 ** 3) }),
+    spawnFn: (_b, _a, opts) => {
+      env = opts.env
+      setTimeout(() => (running = true), 300)
+      return new EventEmitter()
+    },
+  })
+  await l.ensure()
+  assert.strictEqual(env.OLLAMA_GPU_OVERHEAD, String(1024 ** 3))
+})

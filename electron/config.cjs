@@ -9,7 +9,8 @@ const DEFAULTS = {
   vaultPath: null,
   ollamaUrl: 'http://127.0.0.1:11434',
   idleUnloadSeconds: 30, // 0 = never auto-unload
-  autoLoadOnType: true, // start loading the selected local model when the user starts typing
+  autoLoadOnType: true,
+  vramReserveGB: 1, // always keep this much VRAM free; larger models spill the rest into system RAM // start loading the selected local model when the user starts typing
   contextLength: 16384,
   maxAgentSteps: 100,
   autoStartOllama: true,

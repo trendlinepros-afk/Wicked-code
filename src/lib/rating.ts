@@ -6,8 +6,11 @@ export interface Rating {
   detail: string
 }
 
-/** VRAM kept free as a safety margin for the driver, desktop and context growth. */
-export const VRAM_HEADROOM_GB = 0.5
+/** VRAM kept free as a safety margin (Settings → Model memory → VRAM safety buffer). */
+export let VRAM_HEADROOM_GB = 1
+export function setVramReserve(gb: number) {
+  VRAM_HEADROOM_GB = Number.isFinite(gb) && gb >= 0 ? gb : 1
+}
 
 export interface Capacity {
   totalGB: number // GPU VRAM (0 = no GPU detected)

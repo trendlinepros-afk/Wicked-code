@@ -69,6 +69,12 @@ class Ollama {
     }))
   }
 
+  /** Model details (architecture, layer count, …). */
+  async show(model) {
+    const res = await this.request('/api/show', { method: 'POST', body: JSON.stringify({ model }), signal: AbortSignal.timeout(10_000) })
+    return res.json()
+  }
+
   /** Models currently loaded in memory. */
   async ps() {
     const res = await this.request('/api/ps', { signal: AbortSignal.timeout(2000) })

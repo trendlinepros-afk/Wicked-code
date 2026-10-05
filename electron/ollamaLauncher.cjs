@@ -48,8 +48,9 @@ class OllamaLauncher extends EventEmitter {
    * @param {() => Promise<string|null>} [o.find]  override for tests
    * @param {typeof spawn} [o.spawnFn]  override for tests
    */
-  constructor({ ollama, getUrl, logFile, find = findOllama, spawnFn = spawn }) {
+  constructor({ ollama, getUrl, logFile, find = findOllama, spawnFn = spawn, extraEnv = () => ({}) }) {
     super()
+    this.extraEnv = extraEnv
     this.ollama = ollama
     this.getUrl = getUrl
     this.logFile = logFile
@@ -91,7 +92,7 @@ class OllamaLauncher extends EventEmitter {
         /* no log file */
       }
       const child = this.spawnFn(bin, ['serve'], {
-        env: { ...process.env, OLLAMA_HOST: host },
+        env: { ...process.env, ...this.extraEnv(), OLLAMA_HOST: host },
         stdio: ['ignore', log, log],
         windowsHide: true,
         detached: false,

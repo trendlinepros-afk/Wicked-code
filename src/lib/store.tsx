@@ -11,6 +11,7 @@ import {
   type Settings,
   type UpdateState,
 } from './api'
+import { setVramReserve } from './rating'
 
 interface AppStore {
   settings: Settings
@@ -40,6 +41,8 @@ export function useApp(): AppStore {
 
 export function AppProvider({ initial, children }: { initial: Settings; children: ReactNode }) {
   const [settings, setSettings] = useState(initial)
+  // Ratings/"Best for you" respect the VRAM safety buffer (set before children render).
+  setVramReserve(settings.vramReserveGB ?? 1)
   const [modelState, setModelState] = useState<ModelState | null>(null)
   const [gpu, setGpu] = useState<GpuStats | null>(null)
   const [ollamaRunning, setOllamaRunning] = useState(true)

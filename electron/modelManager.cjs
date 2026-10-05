@@ -81,7 +81,7 @@ class ModelManager extends EventEmitter {
       this.lastActivity = this.now()
       this.setStatus('loading')
       try {
-        await this.ollama.load(model, this.keepAlive(), this.runOptions())
+        await this.ollama.load(model, this.keepAlive(), await this.runOptions(model))
         // The model may have been switched while we were loading.
         if (parseModelId(this.current).model !== model) {
           await this.ollama.unload(model).catch(() => {})
